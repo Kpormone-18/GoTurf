@@ -1,6 +1,6 @@
 import axios from "axios";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
+export const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 export const API = `${BACKEND_URL}/api`;
 
 export const api = axios.create({ baseURL: API });
@@ -10,6 +10,11 @@ api.interceptors.request.use((config) => {
   if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
 });
+
+export const getToken = () => localStorage.getItem("goturf_token");
+
+// Build an authenticated file URL for <img src> (object-storage files served by backend).
+export const fileUrl = (path) => `${API}/files/${path}?auth=${encodeURIComponent(getToken() || "")}`;
 
 export function formatApiError(detail) {
   if (detail == null) return "Something went wrong. Please try again.";

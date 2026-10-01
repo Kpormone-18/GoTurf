@@ -1,0 +1,8 @@
+crons:
+  - name: booking-reminders
+    description: "Sends SMS and email reminders for GoTurf sessions starting within the next 3 hours"
+    cron: "*/30 * * * *"
+    endpoint: "{{BASE_URL}}/api/cron/send-reminders"
+    method: POST
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    enabled: true

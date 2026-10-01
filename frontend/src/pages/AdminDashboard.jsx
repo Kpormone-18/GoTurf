@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { api, formatApiError, ghs } from "../lib/api";
+import { api, formatApiError, ghs, fileUrl } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -9,7 +9,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "../components/ui/tabs"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "../components/ui/dialog";
 import { toast } from "sonner";
-import { TrendingUp, Banknote, Building2, Users, AlertCircle, Plus } from "lucide-react";
+import { TrendingUp, Banknote, Building2, Users, AlertCircle, Plus, BadgeCheck } from "lucide-react";
 
 export default function AdminDashboard() {
   const { user, loading } = useAuth();
@@ -20,6 +20,7 @@ export default function AdminDashboard() {
   const [disputes, setDisputes] = useState([]);
   const [coupons, setCoupons] = useState([]);
   const [logs, setLogs] = useState([]);
+  const [verifications, setVerifications] = useState([]);
 
   const load = useCallback(() => {
     api.get("/admin/stats").then((r) => setStats(r.data));
@@ -28,11 +29,12 @@ export default function AdminDashboard() {
     api.get("/admin/disputes").then((r) => setDisputes(r.data));
     api.get("/admin/coupons").then((r) => setCoupons(r.data));
     api.get("/admin/audit-logs").then((r) => setLogs(r.data));
+    api.get("/admin/verifications").then((r) => setVerifications(r.data));
   }, []);
 
   useEffect(() => {
     if (loading) return;
-    if (!user || user.role !== "admin") { navigate("/auth"); return; }
+    if (!user || user.role !== "admin") { navigate("/admin/login"); return; }
     load();
   }, [user, loading, navigate, load]);
 
@@ -60,6 +62,10 @@ export default function AdminDashboard() {
     try { await api.post(`/admin/coupons/${c.id}/toggle`); load(); }
     catch (err) { toast.error(formatApiError(err.response?.data?.detail)); }
   };
+  const decideVerification = async (v, approve) => {
+    try { await api.post(`/admin/verifications/${v.id}/decision?approve=${approve}`); toast.success(`Verification ${approve ? "approved" : "rejected"}`); load(); }
+    catch (err) { toast.error(formatApiError(err.response?.data?.detail)); }
+  };
 
   if (!stats) return <div className="max-w-7xl mx-auto px-5 py-20 text-muted-foreground">Loading admin…</div>;
 
@@ -82,6 +88,7 @@ export default function AdminDashboard() {
           <TabsTrigger value="owners" data-testid="admin-tab-owners">Owners</TabsTrigger>
           <TabsTrigger value="disputes" data-testid="admin-tab-disputes">Disputes</TabsTrigger>
           <TabsTrigger value="coupons" data-testid="admin-tab-coupons">Coupons</TabsTrigger>
+          <TabsTrigger value="verifications" data-testid="admin-tab-verifications">Verifications</TabsTrigger>
           <TabsTrigger value="audit" data-testid="admin-tab-audit">Audit log</TabsTrigger>
         </TabsList>
 
@@ -179,6 +186,43 @@ export default function AdminDashboard() {
               </TableBody>
             </Table>
           </Panel>
+        </TabsContent>
+
+        <TabsContent value="verifications">
+          {verifications.length === 0 ? (
+            <div className="bg-white border border-border rounded-xl p-8 text-center text-muted-foreground mt-4">No verification submissions yet.</div>
+          ) : (
+            <div className="grid md:grid-cols-2 gap-4 mt-4">
+              {verifications.map((v) => (
+                <div key={v.id} className="bg-white border border-border rounded-xl p-4" data-testid={`verification-${v.id}`}>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="font-display font-bold">{v.owner_name}</div>
+                      <div className="text-xs text-muted-foreground">{v.owner_email}</div>
+                    </div>
+                    <span className={`text-xs font-bold uppercase px-2 py-0.5 rounded ${v.status === "approved" ? "bg-accent text-primary" : v.status === "rejected" ? "bg-red-50 text-red-600" : "bg-amber-50 text-amber-700"}`}>{v.status}</span>
+                  </div>
+                  <div className="text-sm mt-2"><span className="text-muted-foreground">Ghana Card:</span> <span className="font-mono font-semibold">{v.ghana_card_number}</span></div>
+                  <div className="grid grid-cols-2 gap-2 mt-3">
+                    <div>
+                      <div className="text-[10px] uppercase font-bold text-muted-foreground mb-1">Card</div>
+                      <img src={fileUrl(v.card_path)} alt="Ghana Card" className="w-full h-28 object-cover rounded-lg border border-border" />
+                    </div>
+                    <div>
+                      <div className="text-[10px] uppercase font-bold text-muted-foreground mb-1">Selfie</div>
+                      <img src={fileUrl(v.selfie_path)} alt="Selfie" className="w-full h-28 object-cover rounded-lg border border-border" />
+                    </div>
+                  </div>
+                  {v.status === "pending" && (
+                    <div className="flex gap-2 mt-3">
+                      <Button size="sm" className="flex-1 bg-primary hover:bg-primary/90" data-testid={`approve-verification-${v.id}`} onClick={() => decideVerification(v, true)}><BadgeCheck className="w-4 h-4 mr-1.5" /> Approve</Button>
+                      <Button size="sm" variant="outline" className="flex-1" data-testid={`reject-verification-${v.id}`} onClick={() => decideVerification(v, false)}>Reject</Button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </TabsContent>
 
         <TabsContent value="audit">

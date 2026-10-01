@@ -9,7 +9,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "../components/ui/tabs"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "../components/ui/dialog";
 import { toast } from "sonner";
-import { Wallet, CalendarCheck, Building2, AlertTriangle, Plus } from "lucide-react";
+import { Wallet, CalendarCheck, Building2, AlertTriangle, Plus, BadgeCheck, Upload, ShieldAlert } from "lucide-react";
 
 export default function OwnerDashboard() {
   const { user, loading } = useAuth();
@@ -26,7 +26,7 @@ export default function OwnerDashboard() {
 
   useEffect(() => {
     if (loading) return;
-    if (!user || !["owner", "admin"].includes(user.role)) { navigate("/auth"); return; }
+    if (!user || !["owner", "admin"].includes(user.role)) { navigate("/owner/login"); return; }
     load();
   }, [user, loading, navigate, load]);
 
@@ -41,6 +41,7 @@ export default function OwnerDashboard() {
 
   if (!ov) return <div className="max-w-7xl mx-auto px-5 py-20 text-muted-foreground">Loading dashboard…</div>;
   const suspended = ov.suspended_until && new Date(ov.suspended_until) > new Date();
+  const verified = ov.verified;
 
   return (
     <div className="max-w-7xl mx-auto px-5 lg:px-8 py-8">
@@ -53,11 +54,18 @@ export default function OwnerDashboard() {
         </div>
       )}
 
+      {!verified && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6 flex items-center gap-2 text-sm font-semibold text-amber-800" data-testid="verify-banner">
+          <ShieldAlert className="w-5 h-5" /> Complete Ghana Card verification to publish your turfs.
+          Status: <span className="uppercase">{ov.verification_status}</span>
+        </div>
+      )}
+
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
         <Stat icon={<Wallet className="w-5 h-5" />} label="Released revenue" value={ghs(ov.revenue)} />
         <Stat icon={<Wallet className="w-5 h-5" />} label="Pending payout" value={ghs(ov.pending_payout)} />
         <Stat icon={<CalendarCheck className="w-5 h-5" />} label="Bookings" value={ov.booking_count} />
-        <Stat icon={<AlertTriangle className="w-5 h-5" />} label="Strikes" value={`${ov.strikes} / 5`} warn={ov.strikes >= 3} />
+        <Stat icon={verified ? <BadgeCheck className="w-5 h-5" /> : <ShieldAlert className="w-5 h-5" />} label="Verification" value={verified ? "Verified" : (ov.verification_status || "Unverified")} warn={!verified} />
       </div>
 
       <Tabs defaultValue="bookings">
@@ -65,6 +73,7 @@ export default function OwnerDashboard() {
           <TabsTrigger value="bookings" data-testid="owner-tab-bookings">Bookings</TabsTrigger>
           <TabsTrigger value="turfs" data-testid="owner-tab-turfs">My turfs</TabsTrigger>
           <TabsTrigger value="payouts" data-testid="owner-tab-payouts">Payouts</TabsTrigger>
+          <TabsTrigger value="verification" data-testid="owner-tab-verification">Verification</TabsTrigger>
         </TabsList>
 
         <TabsContent value="bookings">
@@ -104,7 +113,8 @@ export default function OwnerDashboard() {
         </TabsContent>
 
         <TabsContent value="turfs">
-          <div className="flex justify-end my-4"><TurfDialog onDone={load} /></div>
+          <div className="flex justify-end my-4">{verified ? <TurfDialog onDone={load} /> :
+            <span className="text-sm text-muted-foreground flex items-center gap-1.5"><ShieldAlert className="w-4 h-4 text-amber-500" /> Verify your account to add turfs</span>}</div>
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {turfs.map((t) => (
               <div key={t.id} className="bg-white border border-border rounded-xl overflow-hidden" data-testid={`owner-turf-${t.id}`}>
@@ -149,6 +159,10 @@ export default function OwnerDashboard() {
           </div>
           <p className="text-xs text-muted-foreground mt-3">Payouts release automatically 30 minutes after a session ends, unless a dispute or admin hold is active.</p>
         </TabsContent>
+
+        <TabsContent value="verification">
+          <VerificationPanel verified={verified} status={ov.verification_status} onDone={load} />
+        </TabsContent>
       </Tabs>
     </div>
   );
@@ -162,6 +176,63 @@ const Stat = ({ icon, label, value, warn }) => (
 );
 
 const AMENITY_OPTS = ["Floodlights", "Changing Rooms", "Parking", "Showers", "Cafeteria", "Water", "Indoor", "Spectator Seating", "WiFi", "Equipment Rental", "First Aid"];
+
+function VerificationPanel({ verified, status, onDone }) {
+  const [cardNo, setCardNo] = useState("");
+  const [cardFile, setCardFile] = useState(null);
+  const [selfie, setSelfie] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  if (verified) {
+    return (
+      <div className="bg-white border border-border rounded-xl p-8 mt-4 text-center" data-testid="verification-approved">
+        <BadgeCheck className="w-12 h-12 text-primary mx-auto mb-3" />
+        <h3 className="font-display font-extrabold text-xl">You're verified</h3>
+        <p className="text-sm text-muted-foreground mt-1">Your Ghana Card has been approved. You can publish and manage turfs.</p>
+      </div>
+    );
+  }
+
+  const submit = async () => {
+    if (!cardNo || !cardFile || !selfie) { toast.error("Provide your Ghana Card number, a card photo and a selfie"); return; }
+    setBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append("ghana_card_number", cardNo);
+      fd.append("card_image", cardFile);
+      fd.append("selfie", selfie);
+      await api.post("/owner/verification", fd, { headers: { "Content-Type": "multipart/form-data" } });
+      toast.success("Submitted — an admin will review your documents");
+      onDone();
+    } catch (err) { toast.error(formatApiError(err.response?.data?.detail)); } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="bg-white border border-border rounded-xl p-6 mt-4 max-w-xl" data-testid="verification-form">
+      <h3 className="font-display font-extrabold text-xl mb-1">Ghana Card verification</h3>
+      <p className="text-sm text-muted-foreground mb-4">
+        Status: <span className="font-bold uppercase">{status || "unverified"}</span>.
+        {status === "pending" && " Your submission is under review — you can resubmit if needed."}
+        {status === "rejected" && " Your last submission was rejected. Please resubmit clear documents."}
+      </p>
+      <div className="space-y-4">
+        <div><Label>Ghana Card number</Label><Input data-testid="ghana-card-number" value={cardNo} onChange={(e) => setCardNo(e.target.value)} placeholder="GHA-XXXXXXXXX-X" /></div>
+        <div>
+          <Label>Ghana Card photo</Label>
+          <Input data-testid="card-image" type="file" accept="image/*" onChange={(e) => setCardFile(e.target.files?.[0])} />
+        </div>
+        <div>
+          <Label>Selfie (liveness)</Label>
+          <Input data-testid="selfie-image" type="file" accept="image/*" onChange={(e) => setSelfie(e.target.files?.[0])} />
+        </div>
+        <Button data-testid="submit-verification" disabled={busy} onClick={submit} className="w-full bg-primary hover:bg-primary/90">
+          <Upload className="w-4 h-4 mr-1.5" /> {busy ? "Uploading…" : "Submit for review"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 
 function TurfDialog({ turf, onDone }) {
   const [open, setOpen] = useState(false);

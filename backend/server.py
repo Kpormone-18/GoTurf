@@ -11,16 +11,21 @@ import random
 import string
 import re
 import ipaddress
+import hmac
+import hashlib
 import bcrypt
 import jwt
 import httpx
+import requests
 from datetime import datetime, timezone, timedelta, date as date_cls
 from typing import List, Optional, Literal
 from html import escape
 from html.parser import HTMLParser
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Query
+from fastapi import (FastAPI, APIRouter, HTTPException, Depends, Request, Query,
+                     UploadFile, File, Form, Header)
+from fastapi.responses import Response
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr
@@ -152,6 +157,109 @@ def _email_shell(title: str, lines: List[str]) -> str:
             f'<p style="font-size:12px;color:#94a3b8;margin-top:24px">Sent by GoTurf, Accra. '
             f'We never ask for your password or card details by email.</p>'
             f'</td></tr></table></td></tr></table>')
+
+
+# ------------------------------------------------------------------ INTEGRATIONS CONFIG
+PAYSTACK_SECRET = (os.environ.get("PAYSTACK_SECRET_KEY") or "").strip()
+PAYSTACK_PUBLIC = (os.environ.get("PAYSTACK_PUBLIC_KEY") or "").strip()
+PAYSTACK_ENABLED = PAYSTACK_SECRET.startswith("sk_")
+
+TWILIO_SID = (os.environ.get("TWILIO_ACCOUNT_SID") or "").strip()
+TWILIO_TOKEN = (os.environ.get("TWILIO_AUTH_TOKEN") or "").strip()
+TWILIO_FROM = (os.environ.get("TWILIO_FROM") or "").strip()
+SMS_ENABLED = bool(TWILIO_SID and TWILIO_TOKEN and TWILIO_FROM)
+
+WEBHOOK_CRON_SECRET = (os.environ.get("WEBHOOK_CRON_SECRET") or "").strip()
+
+# ---- Object storage (Emergent managed)
+STORAGE_BASE = (os.environ.get("INTEGRATION_PROXY_URL") or "").strip() or "https://integrations.emergentagent.com"
+STORAGE_URL = STORAGE_BASE.rstrip("/") + "/objstore/api/v1/storage"
+EMERGENT_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
+APP_NAME = "goturf"
+_storage_key = None
+MIME_TYPES = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+              "gif": "image/gif", "webp": "image/webp", "pdf": "application/pdf"}
+
+
+def init_storage(force: bool = False):
+    global _storage_key
+    if _storage_key and not force:
+        return _storage_key
+    resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_KEY}, timeout=30)
+    resp.raise_for_status()
+    _storage_key = resp.json()["storage_key"]
+    return _storage_key
+
+
+def put_object(path: str, data: bytes, content_type: str) -> dict:
+    key = init_storage()
+    resp = requests.put(f"{STORAGE_URL}/objects/{path}",
+                        headers={"X-Storage-Key": key, "Content-Type": content_type},
+                        data=data, timeout=120)
+    if resp.status_code == 404:
+        key = init_storage(force=True)
+        resp = requests.put(f"{STORAGE_URL}/objects/{path}",
+                            headers={"X-Storage-Key": key, "Content-Type": content_type},
+                            data=data, timeout=120)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def get_object(path: str):
+    key = init_storage()
+    resp = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=60)
+    if resp.status_code == 404:
+        key = init_storage(force=True)
+        resp = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=60)
+    resp.raise_for_status()
+    return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
+
+
+# ---- SMS (Twilio-ready; logs when not configured)
+async def send_sms(to: Optional[str], body: str):
+    if not to:
+        return
+    if not SMS_ENABLED:
+        logger.info("[SMS mock] to=%s: %s", to, body)
+        return
+    try:
+        async with httpx.AsyncClient(timeout=20) as c:
+            await c.post(f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_SID}/Messages.json",
+                         auth=(TWILIO_SID, TWILIO_TOKEN),
+                         data={"From": TWILIO_FROM, "To": to, "Body": body})
+    except Exception as e:
+        logger.error("SMS send failed: %s", e)
+
+
+# ---- Shared booking confirmation (used by mock pay, Paystack verify, webhook)
+async def confirm_booking(booking_id: str, payment_ref: str):
+    b = await db.bookings.find_one({"id": booking_id}, {"_id": 0})
+    if not b:
+        return None
+    if b["status"] == "confirmed":
+        return b
+    await db.bookings.update_one({"id": booking_id}, {"$set": {
+        "status": "confirmed", "payment_status": "paid", "amount_paid": b["total"],
+        "payment_ref": payment_ref, "paid_at": iso(now_utc())}})
+    if b.get("coupon"):
+        await db.coupons.update_one({"code": b["coupon"]}, {"$inc": {"uses": 1}})
+    await audit("payment", booking_id, f"Payment confirmed for {b['reference']} ({payment_ref})")
+    b = await db.bookings.find_one({"id": booking_id}, {"_id": 0})
+    cust = b["customer"]
+    if cust.get("email"):
+        html = _email_shell("Your booking is confirmed", [
+            f"Hi {escape(cust['name'])}, your pitch is locked in.",
+            f"<strong>{escape(b['turf_name'])}</strong>",
+            f"Date: {escape(b['date'])} &middot; {b['start_hour']:02d}:00 for {b['duration']}h",
+            f"Reference: <strong>{escape(b['reference'])}</strong>",
+            f"Amount paid: GHS {b['amount_paid']:.2f}",
+            "Funds are held safely in escrow and released to the owner after your session ends.",
+        ])
+        await send_email(to=cust["email"], subject=f"GoTurf booking {b['reference']} confirmed", html=html)
+    await send_sms(cust.get("phone"),
+                   f"GoTurf: Booking {b['reference']} confirmed at {b['turf_name']} on {b['date']} "
+                   f"{b['start_hour']:02d}:00 for {b['duration']}h. See you on the turf!")
+    return b
 
 
 # ------------------------------------------------------------------ AUTH UTILS
@@ -387,7 +495,9 @@ async def register(body: RegisterIn):
     doc = {"id": uid, "name": body.name, "email": email,
            "password_hash": hash_password(body.password), "role": body.role,
            "strikes": 0, "suspended_until": None, "penalty_balance": 0,
-           "verified": body.role != "owner", "created_at": iso(now_utc())}
+           "verified": body.role != "owner",
+           "verification_status": "approved" if body.role != "owner" else "unverified",
+           "created_at": iso(now_utc())}
     await db.users.insert_one(doc)
     token = create_token(uid, email, body.role)
     return {"token": token, "user": {k: doc[k] for k in ("id", "name", "email", "role", "verified")}}
@@ -568,9 +678,110 @@ async def update_contact(booking_id: str, body: ContactIn):
     return await db.bookings.find_one({"id": booking_id}, {"_id": 0})
 
 
+class CheckoutIn(BaseModel):
+    customer: CustomerInfo
+    coupon_code: Optional[str] = None
+    callback_url: Optional[str] = None
+
+
+@api.get("/payments/config")
+async def payments_config():
+    return {"provider": "paystack" if PAYSTACK_ENABLED else "mock",
+            "public_key": PAYSTACK_PUBLIC if PAYSTACK_ENABLED else None,
+            "sms_enabled": SMS_ENABLED}
+
+
+@api.post("/bookings/{booking_id}/checkout")
+async def checkout(booking_id: str, body: CheckoutIn):
+    b = await db.bookings.find_one({"id": booking_id}, {"_id": 0})
+    if not b:
+        raise HTTPException(404, "Booking not found")
+    if b["status"] == "confirmed":
+        return {"mode": "done", "booking_id": booking_id}
+    if b["status"] != "pending_payment":
+        raise HTTPException(400, "Booking cannot be paid in its current state")
+    upd = {"customer": body.customer.model_dump()}
+    total = b["total"]
+    if body.coupon_code:
+        total, coupon = await apply_coupon(body.coupon_code, b["turf_id"], b["quote"]["total"])
+        upd["coupon"] = coupon
+        upd["total"] = total
+    await db.bookings.update_one({"id": booking_id}, {"$set": upd})
+
+    if PAYSTACK_ENABLED:
+        email = body.customer.email or "guest@goturf.gh"
+        ref = b["reference"]
+        try:
+            async with httpx.AsyncClient(timeout=30) as c:
+                resp = await c.post("https://api.paystack.co/transaction/initialize",
+                                    headers={"Authorization": f"Bearer {PAYSTACK_SECRET}",
+                                             "Content-Type": "application/json"},
+                                    json={"email": email, "amount": int(round(total * 100)),
+                                          "currency": "GHS", "reference": ref,
+                                          "callback_url": body.callback_url,
+                                          "channels": ["card", "mobile_money", "bank", "ussd"],
+                                          "metadata": {"booking_id": booking_id}})
+            result = resp.json()
+        except Exception as e:
+            logger.error("Paystack init error: %s", e)
+            raise HTTPException(502, "Could not start payment")
+        if not result.get("status"):
+            raise HTTPException(400, result.get("message", "Payment init failed"))
+        await db.bookings.update_one({"id": booking_id}, {"$set": {"payment_reference": ref}})
+        return {"mode": "paystack", "authorization_url": result["data"]["authorization_url"],
+                "reference": result["data"]["reference"]}
+
+    # mock fallback
+    await confirm_booking(booking_id, "MOCK-" + uuid.uuid4().hex[:12])
+    return {"mode": "mock", "booking_id": booking_id}
+
+
+@api.get("/payments/verify/{reference}")
+async def verify_payment(reference: str):
+    booking = await db.bookings.find_one({"reference": reference}, {"_id": 0}) \
+        or await db.bookings.find_one({"payment_reference": reference}, {"_id": 0})
+    if not booking:
+        raise HTTPException(404, "Booking not found")
+    if not PAYSTACK_ENABLED:
+        b = await confirm_booking(booking["id"], "MOCK-" + uuid.uuid4().hex[:12])
+        return {"status": "success", "booking_id": booking["id"]}
+    try:
+        async with httpx.AsyncClient(timeout=30) as c:
+            resp = await c.get(f"https://api.paystack.co/transaction/verify/{reference}",
+                               headers={"Authorization": f"Bearer {PAYSTACK_SECRET}"})
+        result = resp.json()
+    except Exception as e:
+        logger.error("Paystack verify error: %s", e)
+        raise HTTPException(502, "Could not verify payment")
+    if result.get("status") and result["data"]["status"] == "success":
+        await confirm_booking(booking["id"], reference)
+        return {"status": "success", "booking_id": booking["id"]}
+    return {"status": "failed", "booking_id": booking["id"]}
+
+
+@api.post("/payments/webhook")
+async def paystack_webhook(request: Request):
+    # Cron/webhook endpoints must ack quickly.
+    if not PAYSTACK_ENABLED:
+        return {"status": "ignored"}
+    signature = request.headers.get("x-paystack-signature", "")
+    raw = await request.body()
+    computed = hmac.new(PAYSTACK_SECRET.encode(), raw, hashlib.sha512).hexdigest()
+    if not hmac.compare_digest(computed, signature):
+        raise HTTPException(401, "Invalid signature")
+    event = await request.json()
+    if event.get("event") == "charge.success":
+        ref = event["data"]["reference"]
+        booking = await db.bookings.find_one({"reference": ref}, {"_id": 0}) \
+            or await db.bookings.find_one({"payment_reference": ref}, {"_id": 0})
+        if booking:
+            await confirm_booking(booking["id"], ref)
+    return {"status": "ok"}
+
+
 @api.post("/bookings/{booking_id}/pay")
 async def pay_booking(booking_id: str):
-    """Mock Paystack payment — simulates a successful charge."""
+    """Mock payment confirmation (used when Paystack keys are absent)."""
     b = await db.bookings.find_one({"id": booking_id}, {"_id": 0})
     if not b:
         raise HTTPException(404, "Booking not found")
@@ -578,26 +789,7 @@ async def pay_booking(booking_id: str):
         return b
     if b["status"] != "pending_payment":
         raise HTTPException(400, "Booking cannot be paid in its current state")
-    await db.bookings.update_one({"id": booking_id}, {"$set": {
-        "status": "confirmed", "payment_status": "paid", "amount_paid": b["total"],
-        "payment_ref": "MOCK-" + uuid.uuid4().hex[:12], "paid_at": iso(now_utc())}})
-    if b.get("coupon"):
-        await db.coupons.update_one({"code": b["coupon"]}, {"$inc": {"uses": 1}})
-    await audit("payment", booking_id, f"Payment confirmed (mock) for {b['reference']}")
-    b = await db.bookings.find_one({"id": booking_id}, {"_id": 0})
-    # confirmation email
-    cust = b["customer"]
-    if cust.get("email"):
-        html = _email_shell("Your booking is confirmed", [
-            f"Hi {escape(cust['name'])}, your pitch is locked in.",
-            f"<strong>{escape(b['turf_name'])}</strong>",
-            f"Date: {escape(b['date'])} &middot; {b['start_hour']:02d}:00 for {b['duration']}h",
-            f"Reference: <strong>{escape(b['reference'])}</strong>",
-            f"Amount paid: GHS {b['amount_paid']:.2f}",
-            "Funds are held safely in escrow and released to the owner after your session ends.",
-        ])
-        await send_email(to=cust["email"], subject=f"GoTurf booking {b['reference']} confirmed", html=html)
-    return b
+    return await confirm_booking(booking_id, "MOCK-" + uuid.uuid4().hex[:12])
 
 
 @api.get("/bookings/lookup")
@@ -715,7 +907,67 @@ async def owner_overview(user: dict = Depends(require_roles("owner", "admin"))):
         "strikes": u.get("strikes", 0),
         "suspended_until": u.get("suspended_until"),
         "penalty_balance": u.get("penalty_balance", 0),
+        "verified": u.get("verified", False),
+        "verification_status": u.get("verification_status", "unverified"),
     }
+
+
+# ---- Owner Ghana Card verification
+@api.get("/owner/verification")
+async def get_verification(user: dict = Depends(require_roles("owner", "admin"))):
+    u = await db.users.find_one({"id": user["id"]}, {"_id": 0})
+    v = await db.verifications.find_one({"owner_id": user["id"]}, {"_id": 0})
+    return {"verified": u.get("verified", False),
+            "verification_status": u.get("verification_status", "unverified"),
+            "submission": v}
+
+
+@api.post("/owner/verification")
+async def submit_verification(ghana_card_number: str = Form(...),
+                              card_image: UploadFile = File(...),
+                              selfie: UploadFile = File(...),
+                              user: dict = Depends(require_roles("owner"))):
+    async def _store(f: UploadFile, tag: str):
+        ext = (f.filename.rsplit(".", 1)[-1] if "." in (f.filename or "") else "jpg").lower()
+        path = f"{APP_NAME}/verifications/{user['id']}/{tag}-{uuid.uuid4()}.{ext}"
+        data = await f.read()
+        put_object(path, data, f.content_type or MIME_TYPES.get(ext, "image/jpeg"))
+        return path
+    card_path = await _store(card_image, "card")
+    selfie_path = await _store(selfie, "selfie")
+    doc = {"id": str(uuid.uuid4()), "owner_id": user["id"], "owner_name": user["name"],
+           "owner_email": user["email"], "ghana_card_number": ghana_card_number,
+           "card_path": card_path, "selfie_path": selfie_path,
+           "status": "pending", "submitted_at": iso(now_utc())}
+    await db.verifications.replace_one({"owner_id": user["id"]}, doc, upsert=True)
+    await db.users.update_one({"id": user["id"]}, {"$set": {"verification_status": "pending"}})
+    await audit("verification", user["id"], f"Owner {user['email']} submitted Ghana Card verification")
+    return {"status": "pending"}
+
+
+@api.get("/files/{path:path}")
+async def serve_file(path: str, auth: Optional[str] = Query(None),
+                     authorization: Optional[str] = Header(None)):
+    token = None
+    header = authorization or (f"Bearer {auth}" if auth else None)
+    if header and header.startswith("Bearer "):
+        token = header[7:]
+    if not token:
+        raise HTTPException(401, "Not authenticated")
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
+    except jwt.InvalidTokenError:
+        raise HTTPException(401, "Invalid token")
+    u = await db.users.find_one({"id": payload["sub"]}, {"_id": 0})
+    if not u or u["role"] not in ("admin", "owner"):
+        raise HTTPException(403, "Forbidden")
+    if u["role"] == "owner" and f"/verifications/{u['id']}/" not in ("/" + path):
+        raise HTTPException(403, "Forbidden")
+    try:
+        data, ctype = get_object(path)
+    except Exception:
+        raise HTTPException(404, "File not found")
+    return Response(content=data, media_type=ctype)
 
 
 @api.get("/owner/turfs")
@@ -725,6 +977,9 @@ async def owner_turfs(user: dict = Depends(require_roles("owner", "admin"))):
 
 @api.post("/owner/turfs")
 async def create_turf(body: TurfIn, user: dict = Depends(require_roles("owner", "admin"))):
+    u = await db.users.find_one({"id": user["id"]}, {"_id": 0})
+    if user["role"] == "owner" and not u.get("verified"):
+        raise HTTPException(403, "Complete Ghana Card verification before publishing a turf")
     doc = body.model_dump()
     doc.update({"id": str(uuid.uuid4()), "owner_id": user["id"], "active": True,
                 "created_at": iso(now_utc())})
@@ -958,6 +1213,61 @@ async def audit(kind: str, entity_id: str, message: str):
                                     "message": message, "at": iso(now_utc())})
 
 
+@api.get("/admin/verifications")
+async def admin_verifications(user: dict = Depends(require_roles("admin"))):
+    return await db.verifications.find({}, {"_id": 0}).sort("submitted_at", -1).to_list(500)
+
+
+@api.post("/admin/verifications/{verification_id}/decision")
+async def verification_decision(verification_id: str, approve: bool,
+                                user: dict = Depends(require_roles("admin"))):
+    v = await db.verifications.find_one({"id": verification_id}, {"_id": 0})
+    if not v:
+        raise HTTPException(404, "Verification not found")
+    status = "approved" if approve else "rejected"
+    await db.verifications.update_one({"id": verification_id}, {"$set": {
+        "status": status, "decided_at": iso(now_utc())}})
+    await db.users.update_one({"id": v["owner_id"]}, {"$set": {
+        "verified": approve, "verification_status": status}})
+    await audit("verification", v["owner_id"], f"Owner {v['owner_email']} verification {status}")
+    await send_email(to=v["owner_email"], subject=f"GoTurf verification {status}",
+                     html=_email_shell(f"Verification {status}", [
+                         f"Hi {escape(v['owner_name'])},",
+                         f"Your GoTurf owner verification was <strong>{status}</strong>." +
+                         (" You can now publish your turfs." if approve else " Please resubmit with clear documents.")])) \
+        if v.get("owner_email") else None
+    return {"status": status}
+
+
+@api.post("/cron/send-reminders")
+async def cron_send_reminders(request: Request):
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    token = (request.headers.get("Authorization") or "")[7:]
+    if not WEBHOOK_CRON_SECRET or not hmac.compare_digest(token, WEBHOOK_CRON_SECRET):
+        raise HTTPException(401, "Unauthorized")
+    now = now_utc()
+    window_end = now + timedelta(hours=3)
+    sent = 0
+    bookings = await db.bookings.find(
+        {"status": "confirmed", "reminded": {"$ne": True}}, {"_id": 0}).to_list(1000)
+    for b in bookings:
+        start = parse_dt(b["start_datetime"])
+        if now < start <= window_end:
+            cust = b["customer"]
+            await send_sms(cust.get("phone"),
+                           f"GoTurf reminder: {b['turf_name']} today at {b['start_hour']:02d}:00 "
+                           f"for {b['duration']}h. Ref {b['reference']}.")
+            if cust.get("email"):
+                await send_email(to=cust["email"], subject=f"Reminder: your GoTurf session {b['reference']}",
+                                 html=_email_shell("Your session is coming up", [
+                                     f"Hi {escape(cust['name'])}, this is a reminder for your booking at "
+                                     f"<strong>{escape(b['turf_name'])}</strong> today at {b['start_hour']:02d}:00.",
+                                     f"Reference: <strong>{escape(b['reference'])}</strong>."]))
+            await db.bookings.update_one({"id": b["id"]}, {"$set": {"reminded": True}})
+            sent += 1
+    return {"status": "ok", "reminders_sent": sent}
+
+
 # ------------------------------------------------------------------ SEED
 async def seed():
     await db.users.create_index("email", unique=True)
@@ -982,7 +1292,8 @@ async def seed():
         await db.users.insert_one({"id": owner_id, "name": "Kwame Mensah", "email": "owner@goturf.gh",
                                    "password_hash": hash_password("REDACTED_DO_NOT_USE"), "role": "owner",
                                    "strikes": 0, "suspended_until": None, "penalty_balance": 0,
-                                   "verified": True, "created_at": iso(now_utc())})
+                                   "verified": True, "verification_status": "approved",
+                                   "created_at": iso(now_utc())})
     else:
         owner_id = owner["id"]
     if not await db.users.find_one({"email": "customer@goturf.gh"}):
@@ -1046,6 +1357,11 @@ async def seed():
 
 @app.on_event("startup")
 async def _startup():
+    try:
+        init_storage()
+        logger.info("Object storage initialized")
+    except Exception as e:
+        logger.error("Storage init failed: %s", e)
     await seed()
 
 

@@ -1,12 +1,13 @@
 import { useEffect, useState, useCallback } from "react";
 import { api } from "../lib/api";
 import { TurfCard } from "../components/TurfCard";
+import { TurfMap } from "../components/TurfMap";
 import { TrustBadges } from "../components/TrustBadges";
 import { Footer } from "../components/Footer";
 import { Input } from "../components/ui/input";
 import { Button } from "../components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
-import { Search, MapPin, ArrowRight } from "lucide-react";
+import { Search, MapPin, ArrowRight, LayoutGrid, Map as MapIcon } from "lucide-react";
 
 const AMENITIES = ["all", "Floodlights", "Changing Rooms", "Parking", "Showers", "Cafeteria", "Water", "Indoor", "Spectator Seating"];
 const TYPES = ["all", "5-a-side", "7-a-side", "11-a-side", "Futsal"];
@@ -19,6 +20,7 @@ export default function Home() {
   const [turfType, setTurfType] = useState("all");
   const [amenity, setAmenity] = useState("all");
   const [loading, setLoading] = useState(true);
+  const [view, setView] = useState("list");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -102,12 +104,26 @@ export default function Home() {
               Clear filters
             </Button>
           )}
-          <div className="ml-auto text-sm text-muted-foreground font-semibold" data-testid="turf-count">
-            {loading ? "Searching…" : `${turfs.length} turf${turfs.length === 1 ? "" : "s"} available`}
+          <div className="ml-auto flex items-center gap-3">
+            <div className="flex items-center rounded-lg border border-border bg-white p-0.5">
+              <button data-testid="view-list" onClick={() => setView("list")}
+                className={`flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-md ${view === "list" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}>
+                <LayoutGrid className="w-3.5 h-3.5" /> List
+              </button>
+              <button data-testid="view-map" onClick={() => setView("map")}
+                className={`flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-md ${view === "map" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}>
+                <MapIcon className="w-3.5 h-3.5" /> Map
+              </button>
+            </div>
+            <div className="text-sm text-muted-foreground font-semibold hidden sm:block" data-testid="turf-count">
+              {loading ? "Searching…" : `${turfs.length} turf${turfs.length === 1 ? "" : "s"}`}
+            </div>
           </div>
         </div>
 
-        {turfs.length === 0 && !loading ? (
+        {view === "map" ? (
+          <TurfMap turfs={turfs} />
+        ) : turfs.length === 0 && !loading ? (
           <div className="text-center py-20 text-muted-foreground">
             <p className="text-lg font-semibold">No turfs match your search.</p>
             <p className="text-sm">Try clearing filters or searching another area.</p>
