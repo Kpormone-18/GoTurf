@@ -1,0 +1,113 @@
+{
+  "theme": "light",
+  "design_context": "Marketplace / Booking Web App",
+  "typography": {
+    "headings": {
+      "family": "Cabinet Grotesk",
+      "weights": ["800", "900"],
+      "styles": "tracking-tighter, leading-tight",
+      "instruction": "Use Cabinet Grotesk for all major headings. Never use Inter, Roboto, or standard sans for H1/H2. This gives the athletic, punchy feel."
+    },
+    "body": {
+      "family": "Manrope",
+      "weights": ["400", "500", "600"],
+      "instruction": "Use Manrope for body text, numerical data, time slots, and pricing. It provides exceptional numerical legibility which is crucial for pricing and scheduling."
+    },
+    "hierarchy": {
+      "h1": "text-4xl sm:text-5xl lg:text-6xl tracking-tighter font-black",
+      "h2": "text-2xl sm:text-3xl lg:text-4xl tracking-tight font-extrabold",
+      "h3": "text-xl sm:text-2xl font-bold",
+      "body": "text-base leading-relaxed text-slate-700",
+      "small_labels": "text-xs tracking-[0.2em] uppercase font-bold text-slate-500"
+    }
+  },
+  "colors": {
+    "archetype": "The Performance Pro + Earthy (Accra Context)",
+    "palette": {
+      "background": "#F8F9FA",
+      "surface": "#FFFFFF",
+      "primary": "#059669", 
+      "primary_hover": "#047857",
+      "primary_foreground": "#FFFFFF",
+      "text_main": "#0F172A",
+      "text_muted": "#64748B",
+      "accent_alert": "#EF4444", 
+      "accent_alert_bg": "#FEF2F2",
+      "accent_warning": "#F59E0B", 
+      "border": "#E2E8F0"
+    },
+    "instructions": "Avoid teal green (#1B93A4). Use pure white for booking cards/widgets for maximum contrast against the soft off-white background. The primary green (#059669) must be used strictly for active booking states and primary CTAs."
+  },
+  "visual_enhancers": {
+    "surfaces": {
+      "customer_marketplace": "Flat surfaces with 1px delicate borders (border-border), no massive drop shadows. Keep it tactile and 'Neumorphic' crisp.",
+      "owner_admin_dashboard": "Grid Borders ('Technical' Look). Expose the skeleton, dense compact spacing, 1px borders.",
+      "navigation": "Crystal Glass: backdrop-blur-xl bg-white/80 with a 1px border-b."
+    },
+    "spacing": "Generous Spacing Philosophy. Use p-6, p-8, p-12 for sections. Sticky booking widget on desktop, bottom fixed CTA on mobile.",
+    "trust_signals": "Visual indicators (badges, icons) for Escrow, Instant Confirmation, and Refund Policies. Must be highly visible, not hidden."
+  },
+  "layouts_and_grids": {
+    "marketplace_home": "The 'Tetris' Grid (Mode A) for featured turfs and categories. Asymmetrical, visually engaging.",
+    "turf_profile": "Bento Grid protocol. Left side (col-span-8) for photo gallery, amenities, and explicit rules. Right side (col-span-4) sticky booking widget.",
+    "dashboard": "High Density Grid (Mode B). Tight gaps (gap-4). Every pixel utilized, no jagged bottoms. Sharp edges or max 8px radius."
+  },
+  "components": {
+    "booking_calendar": "Custom dense UI using Shadcn Calendar logic. Show ONLY available slots natively. Block out double-booked slots. Instant click-to-select without page reloads.",
+    "forms_and_checkout": "Shadcn UI Form, Input, Select. Guest checkout requires minimal fields (Name, Phone/Email).",
+    "cancellation_timer": "Sticky or prominently placed visual countdown timer for the full-refund window (e.g., '23h 59m remaining for 100% refund').",
+    "data_display": "Shadcn Table for Admin/Owner booking history, payouts, and dispute management."
+  },
+  "motion_and_interactions": {
+    "scrolling": "Lenis for smooth scrolling on marketing/discovery pages.",
+    "slot_selection": "Micro-animations on time slots (scale down slightly on press, snap to active color).",
+    "page_transitions": "Framer motion for route transitions to ensure 'liquid' feel.",
+    "accessibility": "Respect prefers-reduced-motion. High contrast on active focus rings (focus:ring-primary)."
+  },
+  "image_urls": {
+    "hero_backgrounds": [
+      {
+        "url": "https://images.unsplash.com/photo-1730453255648-af776b331035?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxODl8MHwxfHNlYXJjaHwxfHxhY2NyYSUyMHNreWxpbmV8ZW58MHx8fHwxNzkwODkwOTMyfDA&ixlib=rb-4.1.0&q=85",
+        "description": "Accra urban architecture background for context"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1431324155629-1a6deb1dec8d?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Nzh8MHwxfHNlYXJjaHwxfHxmcmllbmRzJTIwcGxheWluZyUyMHNvY2NlciUyMG5pZ2h0fGVufDB8fHx8MTc5MDg5MDkyMHww&ixlib=rb-4.1.0&q=85",
+        "description": "Night soccer game under lights"
+      }
+    ],
+    "turf_placeholders": [
+      {
+        "url": "https://images.unsplash.com/photo-1776566348668-8a3c3a68cbe9?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NzV8MHwxfHNlYXJjaHw0fHxhc3Ryb3R1cmYlMjBzb2NjZXIlMjBwaXRjaHxlbnwwfHx8fDE3OTA4OTA5MjB8MA&ixlib=rb-4.1.0&q=85",
+        "description": "Aerial view of a soccer team on a green field"
+      },
+      {
+        "url": "https://images.pexels.com/photos/15521639/pexels-photo-15521639.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "description": "Close-up view of artificial turf"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1723272156032-1eac173d47b5?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1NzZ8MHwxfHNlYXJjaHwxfHxzcG9ydHMlMjBmYWNpbGl0eSUyMGVtcHR5JTIwYWVyaWFsfGVufDB8fHx8MTc5MDg5MDkyMHww&ixlib=rb-4.1.0&q=85",
+        "description": "Blue multi-sport court aerial"
+      }
+    ]
+  },
+  "instructions_to_main_agent": [
+    "Ensure 'data-testid' is present on all interactive elements (buttons, slots, forms).",
+    "Do not use generic centered layouts. Use asymmetrical bento grids for discovery and strict dense grids for dashboards.",
+    "Implement explicit trust messaging (escrow, refund policies) with high contrast.",
+    "Use Phosphor icons or Lucide icons exclusively.",
+    "Ensure the booking widget is sticky on desktop and fixed to the bottom on mobile.",
+    "Do not use pure transparent backgrounds for any sticky headers or dropdowns.",
+    "Avoid the 'AI slop' look: avoid large drop shadows, avoid universal transitions, do not center text paragraphs.",
+    "Format currency as GHS (₵). Example: ₵ 150/hr."
+  ],
+  "UNIVERSAL GUIDELINES FOR MAIN AGENT": [
+    "Avoid 'AI slop' aesthetic: no simplistic gradients or uniform boring styling.",
+    "Create depth through layered design elements with z-index hierarchy.",
+    "Use glass-morphism effects with backdrop filters (12-24px blur) where appropriate.",
+    "DO NOT apply universal transition (e.g., transition: all). Target specific properties.",
+    "DO NOT center align the app container (.App { text-align: center; } is banned).",
+    "Never use emoji characters like 🤖🧠💭 for icons.",
+    "Use sonner for toasts notifications.",
+    "All interactive elements must include data-testid attribute in kebab-case."
+  ]
+}
