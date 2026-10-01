@@ -24,7 +24,7 @@ export default function GuestLookup() {
 
   const cancel = async () => {
     try {
-      const { data } = await api.post(`/bookings/${booking.id}/cancel`);
+      const { data } = await api.post(`/bookings/${booking.id}/cancel`, null, { params: { contact } });
       toast.success(`Cancelled. Refund: ${ghs(data.refund.refund_amount)}`);
       const { data: b } = await api.get(`/bookings/${booking.id}`);
       setBooking(b);

@@ -630,11 +630,22 @@ async def my_bookings(user: dict = Depends(get_current_user)):
     return bs
 
 
+def authorize_booking(b: dict, user: Optional[dict], contact: Optional[str]):
+    if user and (b.get("user_id") == user["id"] or user["role"] == "admin"):
+        return
+    c = b.get("customer", {})
+    if contact and contact.lower() in [str(c.get("email", "")).lower(), str(c.get("phone", ""))]:
+        return
+    raise HTTPException(403, "Not authorized to manage this booking")
+
+
 @api.post("/bookings/{booking_id}/cancel")
-async def cancel_booking(booking_id: str):
+async def cancel_booking(booking_id: str, contact: Optional[str] = None,
+                         user: Optional[dict] = Depends(get_optional_user)):
     b = await db.bookings.find_one({"id": booking_id}, {"_id": 0})
     if not b:
         raise HTTPException(404, "Booking not found")
+    authorize_booking(b, user, contact)
     if b["status"] not in ("confirmed", "pending_payment"):
         raise HTTPException(400, "Booking cannot be cancelled")
     info = refund_info(b)
@@ -655,10 +666,12 @@ async def cancel_booking(booking_id: str):
 
 
 @api.post("/bookings/{booking_id}/reschedule-request")
-async def reschedule_request(booking_id: str, body: RescheduleIn):
+async def reschedule_request(booking_id: str, body: RescheduleIn, contact: Optional[str] = None,
+                             user: Optional[dict] = Depends(get_optional_user)):
     b = await db.bookings.find_one({"id": booking_id}, {"_id": 0})
     if not b:
         raise HTTPException(404, "Booking not found")
+    authorize_booking(b, user, contact)
     if b["status"] != "confirmed":
         raise HTTPException(400, "Only confirmed bookings can be rescheduled")
     await db.bookings.update_one({"id": booking_id}, {"$set": {
