@@ -961,7 +961,7 @@ async def serve_file(path: str, auth: Optional[str] = Query(None),
     u = await db.users.find_one({"id": payload["sub"]}, {"_id": 0})
     if not u or u["role"] not in ("admin", "owner"):
         raise HTTPException(403, "Forbidden")
-    if u["role"] == "owner" and f"/verifications/{u['id']}/" not in ("/" + path):
+    if u["role"] == "owner" and not path.startswith(f"{APP_NAME}/verifications/{u['id']}/"):
         raise HTTPException(403, "Forbidden")
     try:
         data, ctype = get_object(path)

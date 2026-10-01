@@ -206,11 +206,11 @@ export default function AdminDashboard() {
                   <div className="grid grid-cols-2 gap-2 mt-3">
                     <div>
                       <div className="text-[10px] uppercase font-bold text-muted-foreground mb-1">Card</div>
-                      <img src={fileUrl(v.card_path)} alt="Ghana Card" className="w-full h-28 object-cover rounded-lg border border-border" />
+                      <img src={fileUrl(v.card_path)} alt="Ghana Card" className="w-full h-28 object-cover rounded-lg border border-border bg-muted" onError={(e) => { e.currentTarget.style.opacity = 0.2; }} />
                     </div>
                     <div>
                       <div className="text-[10px] uppercase font-bold text-muted-foreground mb-1">Selfie</div>
-                      <img src={fileUrl(v.selfie_path)} alt="Selfie" className="w-full h-28 object-cover rounded-lg border border-border" />
+                      <img src={fileUrl(v.selfie_path)} alt="Selfie" className="w-full h-28 object-cover rounded-lg border border-border bg-muted" onError={(e) => { e.currentTarget.style.opacity = 0.2; }} />
                     </div>
                   </div>
                   {v.status === "pending" && (

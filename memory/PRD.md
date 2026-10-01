@@ -32,6 +32,16 @@ guest, customer, owner, admin (admin covers support/finance/super for V1).
 - Cancel/reschedule authorization hardened (owning token or matching contact).
 
 ## Backlog / remaining
+## Implemented (2026-06, iteration 2 — 43/43 backend tests + all frontend flows passed)
+- **Live payments (Paystack), keys-ready**: `/api/payments/config`, `/bookings/{id}/checkout` (card + mobile money), `/payments/verify/{ref}`, signature-verified `/payments/webhook`. MOCK mode until PAYSTACK keys set in backend/.env.
+- **SMS alerts (Twilio-ready)**: `send_sms` sends confirmations + reminders; logs when TWILIO_* absent. Reminder cron `/api/cron/send-reminders` (WEBHOOK_CRON_SECRET auth), every 30 min via `.emergent/crons.yml`.
+- **Owner Ghana Card verification**: card + selfie uploads to object storage, admin review/approve; unverified owners blocked from publishing (`POST /owner/turfs` → 403). Admin Verifications tab with image previews.
+- **Map discovery**: Leaflet + OpenStreetMap list/map toggle on Home (free, no key).
+- **Separate branded portals**: customers `/`+`/auth`, owners `/owner/login`+`/owner`, admin `/admin/login`+`/admin`.
+
+## Integration keys (backend/.env — empty = mock/log): PAYSTACK_SECRET_KEY, PAYSTACK_PUBLIC_KEY, TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM. Set to go live.
+
+## Older backlog / remaining
 - P0: Real Paystack integration (payments + payout/mobile-money verification); background payout scheduler job (currently computed lazily on read).
 - P1: SMS alerts (Twilio); owner identity verification (Ghana Card + liveness); email OTP / Google sign-in; brute-force lockout on login; dispute evidence upload (object storage).
 - P2: Analytics charts, reconciliation export, coupon targeting UI, phone-number normalization, split server.py into modules, migrate to FastAPI lifespan handlers, events workflow (V2), multi-city.

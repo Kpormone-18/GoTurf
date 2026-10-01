@@ -1,0 +1,52 @@
+{
+  "summary": "Iteration-2 testing: 43/43 backend pytest tests passed (30 regression + 13 new). New coverage: payments mock config, mock checkout -> confirmed booking with amount_paid, /payments/verify/{ref} mock success, owner Ghana-Card verification E2E (register unverified -> 403 on create_turf -> submit multipart (card + selfie PNG) -> pending -> admin lists -> admin GET /files/{path} with ?auth=token returns image, without token 401 -> admin approve -> owner can POST /owner/turfs 200), cron reminders (401 without secret, 200 {status:ok,reminders_sent:N} with Bearer gt_cron_...). Frontend Playwright: Home List/Map toggle works, Leaflet map (data-testid turf-map) shows markers across Accra; owner portal /owner/login lands owner@goturf.gh on /owner; admin portal /admin/login lands kpomsgh@gmail.com on /admin; Verifications admin tab renders submission cards with Ghana Card number + CARD/SELFIE preview panels; non-admin customer rejected at /admin/login (stays on page, not routed to /admin); customer login at /auth lands on /my-bookings. Regression test file updated to pass contact param to /cancel and /reschedule-request (which now correctly require ownership via authorize_booking - the security concern flagged in iteration_1 has been fixed).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "@app.on_event startup/shutdown", "issue": "Still using deprecated FastAPI on_event; migrate to lifespan handlers (same as prev iteration)."},
+      {"endpoint": "POST /api/admin/verifications/{id}/decision", "issue": "approve is a query-string bool (?approve=true) rather than JSON body - consistent with other admin mutators but still unusual."},
+      {"endpoint": "GET /api/files/{path}", "issue": "Owner path check uses substring match on `/verifications/{id}/` inside the given path; works but is fragile — a crafted path like foo/verifications/{other}/bar/verifications/{self}/x would pass. Low risk since storage keys are server-generated."},
+      {"endpoint": "GET /api/files/{path}", "issue": "Token passed via ?auth= query param gets logged in request/access logs (vs headers). Acceptable for internal links from React, but consider using short-lived signed URLs long term."},
+      {"endpoint": "server.py", "issue": "File is now 1386 lines (up from 1057); well past the 700-line threshold. Split into routes/auth/payments/verification/admin modules."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Admin Verifications tab", "issues": ["CARD/SELFIE preview panels render as empty boxes when the uploaded image is tiny (test uploads were 1x1 PNGs). With real uploads they should render; consider adding an onError placeholder + visible border/background so an unloadable image is obvious to admins."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/backend/tests/test_iteration2.py",
+    "/app/test_reports/pytest/pytest_results.xml",
+    "/app/test_reports/pytest/iteration2.xml"
+  ],
+  "action_items": [
+    "Modularize server.py (1386 LOC) into submodules — critical for maintainability.",
+    "Migrate @app.on_event to FastAPI lifespan handlers.",
+    "Add onError placeholder on admin verification image previews.",
+    "Consider signed URLs instead of ?auth=token query param for /files/{path}."
+  ],
+  "critical_code_review_comments": [
+    "serve_file ownership check uses substring match on the storage path; prefer validating path starts with f\"{APP_NAME}/verifications/{user_id}/\" exactly.",
+    "verification_decision uses a trailing-expression short-circuit (`await send_email(...) if v.get('owner_email') else None`) — works but is harder to read; use a conditional block.",
+    "Cron endpoint comment says 'enqueue/background the actual work' but the handler still awaits send_sms + send_email inline per booking in the request path. For >~50 due reminders this could time out; move to a background task.",
+    "confirm_booking is idempotent on status=='confirmed' but doesn't guard against concurrent calls (two Paystack verify + webhook arriving together). Consider findOneAndUpdate with status filter for atomicity.",
+    "init_storage() is called synchronously in startup; failure is only logged — subsequent put_object/get_object calls will raise 500. Acceptable given the live Emergent object storage, but surface a readiness flag.",
+    "No input validation on ghana_card_number format (should match GHA-XXXXXXXXX-X)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration2.py (new - 13 tests)",
+    "/app/backend/tests/backend_test.py (updated cancel + reschedule tests to pass contact= param now that endpoints require authorization)"
+  ],
+  "success_rate": {"backend": "100% (43/43)", "frontend": "100% of flows attempted (map toggle, owner portal, admin portal + verifications tab, non-admin reject, customer /auth)"},
+  "test_credentials": "Loaded from /app/memory/test_credentials.md; all three roles + cron secret verified end-to-end.",
+  "seed_data_creation": "Each test run creates 1 unverified owner (test_owner_{hex}@goturf.gh), submits verification with 1x1 PNG files to object storage, admin approves it, and owner creates 1 TEST turf. Residual data accumulates (4 approved TEST_Owner cards visible in admin Verifications UI) — consider periodic cleanup.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend has two test files now: backend_test.py (regression, 30 tests) and test_iteration2.py (new features, 13 tests). The /cancel and /reschedule-request endpoints now REQUIRE authorize_booking — pass ?contact={email_or_phone} query param when not authenticated, else 403. Payments live in MOCK mode (PAYSTACK_SECRET empty); POST /bookings/{id}/checkout returns {mode:'mock'} and directly confirms the booking (bypasses /pay). SMS is MOCKED (logs only). Owner verification is enforced on POST /owner/turfs (not PUT). File auth accepts either Authorization header OR ?auth=token query param. Each test_iteration2 run adds residual owners + verifications in Mongo — fine for now, but if seed data starts conflicting consider cleaning db.users where email LIKE 'test_owner_%'.",
+  "rca of the issue": "N/A — no bugs encountered. The two initial regression failures were test-file issues (missing contact= param); iteration-2 correctly tightened auth on cancel/reschedule per the security concern flagged in iteration_1.",
+  "security_notes": "Previously-flagged auth gap on /cancel and /reschedule-request is FIXED via new authorize_booking() helper (requires owning user, admin, or matching customer contact)."
+}

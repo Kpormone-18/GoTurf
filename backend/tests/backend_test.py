@@ -238,7 +238,8 @@ def test_lookup_booking(s, guest_booking):
 
 
 def test_cancel_booking_refund(s, guest_booking):
-    r = s.post(f"{API}/bookings/{guest_booking['id']}/cancel", timeout=30)
+    r = s.post(f"{API}/bookings/{guest_booking['id']}/cancel",
+               params={"contact": "TEST_guest@goturf.gh"}, timeout=30)
     assert r.status_code == 200
     info = r.json()["refund"]
     assert "refund_amount" in info
@@ -270,6 +271,7 @@ def test_reschedule_future_booking_requires_confirmed(s, guest_booking):
     # guest_booking is now cancelled; so expect 400
     r = s.post(f"{API}/bookings/{guest_booking['id']}/reschedule-request",
                json={"new_date": _future_date_time(), "new_start_hour": 10, "new_duration": 1},
+               params={"contact": "TEST_guest@goturf.gh"},
                timeout=30)
     assert r.status_code == 400
 
