@@ -1,0 +1,52 @@
+{
+  "summary": "Iteration-3 testing: 55/55 backend pytest tests passing (30 regression + 13 iteration-2 updated + 12 new iteration-3). New coverage: Paystack live-test mode config (provider='paystack'), Paystack checkout initialization returning real https://checkout.paystack.com/ authorization_url with booking staying pending_payment, Paystack verify for incomplete transactions returning status='failed' (and NOT confirming the booking), Paystack webhook — 401 on invalid signature + 200 on valid HMAC-SHA512 signature using PAYSTACK_SECRET_KEY which also confirms the booking (status=confirmed, payment_status=paid), owner payout-method endpoint (momo + bank happy paths + both 400 validation cases), morning-reminders cron (401 without secret, 200 {status:ok, morning_reminders_sent:N} with Bearer secret) + regression on /cron/send-reminders. Frontend Playwright: owner login -> Payouts tab -> payout-method-card renders, MoMo flow (pm-type-momo + pm-account-name + pm-momo-provider=MTN MoMo + pm-momo-number) saves via POST /owner/payout-method 200, toggle to Bank reveals pm-bank-name and pm-account-number fields; Checkout page /checkout/{bookingId} shows 'Card', 'Mobile Money', 'Secured by Paystack' labels and pay-btn with text 'Pay ₵ 180 with Paystack'. OPTIONAL live Paystack hosted-page card flow was NOT executed (marked skipped per the request — Paystack UI anti-automation + OTP step not reliably automatable).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/payments/webhook", "issue": "Webhook handler does inline awaits for confirm_booking (sends email + updates DB) in the request path. Paystack retries webhooks on >5s delay; move to background task for safety."},
+      {"endpoint": "GET /api/payments/verify/{reference}", "issue": "When Paystack returns non-success, response is {status:'failed'} but no reason/code is surfaced to the client. Consider including result.data.gateway_response to help debugging."},
+      {"endpoint": "POST /api/bookings/{id}/checkout", "issue": "Paystack init error path returns 400 with raw result.message — leaks third-party message to clients. Fine for test mode, consider mapping to a generic message in prod."},
+      {"endpoint": "server.py", "issue": "File now 1441 lines (up from 1386). Still well past the 700-line split threshold flagged in iteration-2. Not addressed."},
+      {"endpoint": "@app.on_event startup/shutdown", "issue": "Still using deprecated FastAPI on_event; migrate to lifespan handlers (flagged in iter-1 and iter-2)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Owner > Payouts tab", "issues": ["React console warning: 'A component is changing a controlled input to be uncontrolled' + 'value prop on select should not be null' when toggling between momo/bank. Caused by initial f.momo_provider / f.bank_name being null|undefined. Set defaults ('' or MOMO_PROVIDERS[0]) in the PayoutMethodCard useState initializer to avoid controlled→uncontrolled flip."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration3.py",
+    "/app/backend/tests/test_iteration2.py",
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/iteration3.xml",
+    "/app/test_reports/pytest/all_iteration3.xml"
+  ],
+  "action_items": [
+    "Fix controlled→uncontrolled React warnings in PayoutMethodCard (initialize momo_provider/bank_name/account_number/momo_number to '' instead of undefined).",
+    "(Carry-over) Modularize server.py (1441 LOC) into submodules — maintainability.",
+    "(Carry-over) Migrate @app.on_event to FastAPI lifespan handlers.",
+    "(Optional) Move paystack_webhook's confirm_booking into a BackgroundTask so the 200 ack is immediate."
+  ],
+  "critical_code_review_comments": [
+    "paystack_webhook correctly uses hmac.compare_digest + SHA-512 (good). It looks up booking by both reference and payment_reference (good — matches checkout init which stores reference as the booking.reference).",
+    "verify_payment returns status='failed' without differentiating 'pending' vs 'failed' states from Paystack. For hosted-flow UX, consider surfacing 'pending' when data.status in ('ongoing','pending') so callback page can poll instead of showing a hard failure.",
+    "set_payout_method writes the payout_method to the user doc but doesn't mask/redact the account_number/momo_number in the audit log message (ok, number is not logged, but confirm). Consider validating momo_number is 10 digits + Ghana prefix.",
+    "PayoutMethodIn allows type='bank' with account_name only + extra momo fields present (no stripping of irrelevant fields on save). Low priority — just stored noise.",
+    "cron_morning_reminders filters by date==today (UTC). Accra is UTC+0 so this is correct for GH, but if the service is ever moved out of UTC, this will drift. Add explicit tz handling."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration3.py (NEW - 12 tests covering Paystack config/checkout/verify/webhook, payout-method CRUD + validation, morning-reminders cron + regression on send-reminders)",
+    "/app/backend/tests/test_iteration2.py (updated: test_payments_config_mock -> test_payments_config to accept paystack provider; test_checkout_mock_confirms -> test_checkout_initializes to handle paystack mode where booking stays pending_payment; test_payment_verify_mock -> test_payment_verify to allow 'failed' status when live)"
+  ],
+  "success_rate": {"backend": "100% (55/55)", "frontend": "100% of flows attempted (owner login + payouts save momo + toggle bank; checkout page labels + pay button text)"},
+  "test_credentials": "Loaded from /app/memory/test_credentials.md; owner@goturf.gh and admin kpomsgh@gmail.com both logged in; cron secret validated from backend/.env.",
+  "seed_data_creation": "test_iteration3 creates ~2 additional pending-payment bookings per run on seeded turfs (one for checkout_init test, one for webhook test which becomes confirmed). Residual noise in DB; owner@goturf.gh payout_method now set to {type:'bank', bank_name:'Ecobank', account_number:'0123456789'} by the last payout test (and {type:'momo', MTN, 0244111222} written by Playwright). Consider cleanup if payout_method state matters for next iteration.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Paystack is now REAL in test mode. provider='paystack' from /api/payments/config. POST /bookings/{id}/checkout returns mode='paystack' with authorization_url (https://checkout.paystack.com/...) and reference. GET /payments/verify/{ref} calls Paystack live; returns 'failed' until the hosted flow is completed. POST /payments/webhook verifies HMAC-SHA512(secret, raw_body) == x-paystack-signature; on charge.success it confirms the booking matched by data.reference. Payout endpoints: GET/POST /api/owner/payout-method, PayoutMethodIn requires type+account_name, momo needs momo_provider+momo_number, bank needs bank_name+account_number. New cron: POST /api/cron/morning-reminders with Bearer gt_cron_... returns {status:ok, morning_reminders_sent:N}. Frontend MOMO_PROVIDERS = ['MTN MoMo','Telecel Cash','AirtelTigo Money'] — use full value when calling select_option. The optional live Paystack UI card payment (4084084084084081) was NOT run as it requires OTP+PIN+anti-bot bypass; main agent can manually verify through browser.",
+  "rca of the issue": "N/A — no bugs encountered. Only one minor React controlled-component warning in Owner > Payouts PayoutMethodCard caused by uninitialized form fields; a one-line defaultValue change resolves it.",
+  "optional_tests_skipped": ["Live Paystack hosted checkout UI flow with test card 4084084084084081 — Paystack's hosted page is iframe/CSP-restricted and the OTP step is not reliably automatable in Playwright. Webhook flow (which is the production code path for confirmation) is fully covered."]
+}

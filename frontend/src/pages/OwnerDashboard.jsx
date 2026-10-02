@@ -187,7 +187,14 @@ function PayoutMethodCard() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    api.get("/owner/payout-method").then((r) => { setPm(r.data); if (r.data) setF({ ...f, ...r.data }); setLoaded(true); });
+    api.get("/owner/payout-method").then((r) => {
+      setPm(r.data);
+      if (r.data) {
+        const clean = Object.fromEntries(Object.entries(r.data).map(([k, v]) => [k, v ?? ""]));
+        setF((prev) => ({ ...prev, ...clean, momo_provider: clean.momo_provider || "MTN MoMo" }));
+      }
+      setLoaded(true);
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
