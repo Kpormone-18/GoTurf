@@ -999,6 +999,41 @@ async def serve_file(path: str, auth: Optional[str] = Query(None),
     return Response(content=data, media_type=ctype)
 
 
+# ---- Media uploads (turf photos) + public serving
+ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+MAX_UPLOAD_BYTES = 6 * 1024 * 1024
+
+
+@api.post("/owner/uploads")
+async def upload_media(files: List[UploadFile] = File(...),
+                       user: dict = Depends(require_roles("owner", "admin"))):
+    out = []
+    for f in files:
+        data = await f.read()
+        if len(data) > MAX_UPLOAD_BYTES:
+            raise HTTPException(400, f"{f.filename} is larger than 6MB")
+        ct = (f.content_type or "").lower()
+        if ct not in ALLOWED_IMAGE_TYPES:
+            raise HTTPException(400, "Only JPG, PNG, WEBP or GIF images are allowed")
+        ext = ct.split("/")[-1].replace("jpeg", "jpg")
+        path = f"{APP_NAME}/turfs/{user['id']}/{uuid.uuid4()}.{ext}"
+        put_object(path, data, ct)
+        out.append({"path": path, "url": f"/api/media/{path}"})
+    return {"files": out}
+
+
+@api.get("/media/{path:path}")
+async def serve_media(path: str):
+    # Public read for turf media only; verification docs stay private via /files.
+    if ".." in path or not path.startswith(f"{APP_NAME}/turfs/"):
+        raise HTTPException(403, "Forbidden")
+    try:
+        data, ctype = get_object(path)
+    except Exception:
+        raise HTTPException(404, "File not found")
+    return Response(content=data, media_type=ctype, headers={"Cache-Control": "public, max-age=86400"})
+
+
 @api.get("/owner/turfs")
 async def owner_turfs(user: dict = Depends(require_roles("owner", "admin"))):
     return await db.turfs.find({"owner_id": user["id"]}, {"_id": 0}).to_list(200)

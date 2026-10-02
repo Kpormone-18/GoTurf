@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { api, formatApiError, ghs } from "../lib/api";
+import { api, formatApiError, ghs, BACKEND_URL } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -9,7 +9,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "../components/ui/tabs"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "../components/ui/dialog";
 import { toast } from "sonner";
-import { Wallet, CalendarCheck, Building2, AlertTriangle, Plus, BadgeCheck, Upload, ShieldAlert, Landmark } from "lucide-react";
+import { Wallet, CalendarCheck, Building2, AlertTriangle, Plus, BadgeCheck, Upload, ShieldAlert, Landmark, X, ImagePlus } from "lucide-react";
 
 export default function OwnerDashboard() {
   const { user, loading } = useAuth();
@@ -310,6 +310,7 @@ function VerificationPanel({ verified, status, onDone }) {
 
 function TurfDialog({ turf, onDone }) {
   const [open, setOpen] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [f, setF] = useState(turf || {
     name: "", neighborhood: "", location: "", description: "", turf_type: "5-a-side", playing_format: "5v5",
     base_hourly: 150, peak_hourly: 200, weekend_hourly: 220,
@@ -358,7 +359,39 @@ function TurfDialog({ turf, onDone }) {
               ))}
             </div>
           </div>
-          <div><Label>Image URL</Label><Input value={f.images?.[0] || ""} onChange={(e) => setF({ ...f, images: [e.target.value] })} /></div>
+          <div>
+            <Label>Turf photos</Label>
+            <div className="grid grid-cols-3 gap-2 mt-1">
+              {(f.images || []).map((img, i) => (
+                <div key={i} className="relative group rounded-lg overflow-hidden border border-border aspect-video">
+                  <img src={img} alt="" className="w-full h-full object-cover" />
+                  <button type="button" data-testid={`remove-image-${i}`}
+                    onClick={() => setF({ ...f, images: f.images.filter((_, idx) => idx !== i) })}
+                    className="absolute top-1 right-1 w-6 h-6 rounded-full bg-black/60 text-white grid place-items-center opacity-0 group-hover:opacity-100 transition-opacity">
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ))}
+              <label data-testid="upload-image-label" className="aspect-video rounded-lg border-2 border-dashed border-border grid place-items-center cursor-pointer hover:border-primary text-muted-foreground hover:text-primary">
+                {uploading ? <span className="text-xs font-semibold">Uploading…</span> : <span className="flex flex-col items-center text-xs font-semibold"><ImagePlus className="w-5 h-5 mb-1" /> Upload</span>}
+                <input type="file" accept="image/*" multiple className="hidden" data-testid="turf-image-input"
+                  onChange={async (e) => {
+                    const files = Array.from(e.target.files || []);
+                    if (!files.length) return;
+                    setUploading(true);
+                    try {
+                      const fd = new FormData();
+                      files.forEach((file) => fd.append("files", file));
+                      const { data } = await api.post("/owner/uploads", fd, { headers: { "Content-Type": "multipart/form-data" } });
+                      const urls = data.files.map((x) => `${BACKEND_URL}${x.url}`);
+                      setF((prev) => ({ ...prev, images: [...(prev.images || []), ...urls] }));
+                    } catch (err) { toast.error(formatApiError(err.response?.data?.detail)); }
+                    finally { setUploading(false); e.target.value = ""; }
+                  }} />
+              </label>
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">JPG, PNG, WEBP or GIF up to 6MB. First photo is the cover.</p>
+          </div>
         </div>
         <DialogFooter><Button onClick={save} data-testid="save-turf" className="bg-primary hover:bg-primary/90">{turf ? "Save changes" : "Create turf"}</Button></DialogFooter>
       </DialogContent>
