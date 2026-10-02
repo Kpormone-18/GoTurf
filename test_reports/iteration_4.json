@@ -1,0 +1,46 @@
+{
+  "summary": "Iteration-4 focused testing on the new File & media storage feature (turf photo uploads). Backend: 12/12 pytest tests pass covering POST /api/owner/uploads (auth required 401, non-image rejected 400, happy-path path under goturf/turfs/{owner_id}/ with url=/api/media/<path>), GET /api/media/{path} (200 public no-auth with correct image bytes + content-type and Cache-Control:public, 403 for goturf/verifications/ prefix, 403 for other prefixes, 403/404 for path traversal '..'), /files regression (401 without token), owner create-turf-with-image happy path (persisted + visible on GET /turfs/{id}), owner payout-method POST momo regression (200). Frontend Playwright: logged in owner@goturf.gh via /auth (login-email/login-password/login-submit), navigated via owner-tab-turfs, opened add-turf-btn dialog, uploaded a 1x1 PNG through hidden turf-image-input, thumbnail + remove-image-0 appeared, img src is the absolute https URL to /api/media/goturf/turfs/{owner_id}/<uuid>.png. Filled turf-name, turf-hood, turf-type (plain input), turf-base=200, clicked save-turf → new turf 'TEST_ITER4_UI_<ts>' appears in My Turfs with its /api/media/... image, and the same image renders on the public Home grid. Zero console errors during the flow.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/owner/uploads", "issue": "Content-type is trusted entirely from the client (f.content_type). A client can set image/png on arbitrary bytes and bypass the type gate. Consider sniffing magic bytes (e.g., imghdr/PIL) and/or validating extension vs. sniffed type."},
+      {"endpoint": "POST /api/owner/uploads", "issue": "Size check is per-file but there is no cap on total files per request, nor on cumulative size. A caller can POST many 6MB files in one request. Add max files-per-request (e.g., 10) and per-user rate limiting."},
+      {"endpoint": "POST /api/owner/uploads", "issue": "Entire file is read into memory with await f.read() before size check. For a 6MB cap this is fine, but it means a client sending a 100MB stream is fully buffered before the 400 is returned. Consider streaming with an incremental size check."},
+      {"endpoint": "GET /api/media/{path}", "issue": "Public endpoint has no rate limiting and no object-exists check before get_object (which just 404s on exception). Fine, but add explicit 404 on NoSuchKey vs. 500 on other backend errors for easier debugging."},
+      {"endpoint": "DELETE /api/owner/turfs/{id}", "issue": "Returned 405 in cleanup (no delete route). Not a regression — just noting the owner cannot delete a turf through the API, only toggle active. If intended, OK; else expose a soft-delete endpoint."},
+      {"endpoint": "server.py", "issue": "Now 1476 lines (was 1441). Still above the 700-line split threshold flagged in iterations 1-3. Not addressed."},
+      {"endpoint": "@app.on_event startup/shutdown", "issue": "Still deprecated FastAPI on_event (carry-over from iter-1/2/3)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration4.py",
+    "/app/test_reports/pytest/iteration4.xml"
+  ],
+  "action_items": [
+    "(New, LOW) Sniff file magic bytes in upload_media instead of trusting Content-Type; also cap number of files per request.",
+    "(Carry-over) Modularize server.py (1476 LOC) and migrate on_event to lifespan handlers.",
+    "(Carry-over from iter-3) Fix controlled→uncontrolled React warnings in PayoutMethodCard (not re-tested this run)."
+  ],
+  "critical_code_review_comments": [
+    "serve_media correctly restricts to the goturf/turfs/ prefix and rejects '..', keeping verification docs private — good separation from /files.",
+    "upload_media stores objects under goturf/turfs/{owner_id}/<uuid>.<ext>, which is a nice per-owner namespace, but there is no server-side ownership check on serve_media; any owner's media is readable by anyone (that's intended for public turf photos, just confirm product intent).",
+    "The frontend builds absolute URLs via `${BACKEND_URL}${url}` and stores them in turf.images. If BACKEND_URL ever changes (preview vs. prod), all existing turf.images rows become dead links. Consider storing the relative path and resolving at render time.",
+    "Content-Type gate uses the client-provided MIME; combine with filename extension validation and server-side sniffing to prevent SVG/XSS or disguised uploads.",
+    "No image dimension / aspect / content moderation on uploads — fine for MVP, worth flagging for a future iteration (ClamAV + a moderation step for public media)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration4.py (NEW - 12 tests: upload auth/validation/happy-path, media public-serve + prefix/traversal gates, /files 401 regression, create-turf-with-image + public GET, payout momo regression)"
+  ],
+  "success_rate": {"backend": "100% (12/12 iteration-4 new tests)", "frontend": "100% of flows attempted (owner login → turfs tab → add-turf dialog → image upload → thumbnail+remove → save → appears in My Turfs with /api/media URL → renders on public Home)"},
+  "test_credentials": "Loaded from /app/memory/test_credentials.md; owner@goturf.gh / REDACTED_DO_NOT_USE used.",
+  "seed_data_creation": "Each run creates: (1) one goturf/turfs/<owner_id>/<uuid>.png object (1x1 PNG, ~70 bytes) via test_upload_happy_path; (2) one TEST_ITER4 turf doc referencing that image (cleaned up via DELETE which currently 405s so the turf persists — minor cleanup gap, consider adding soft-delete). The Playwright flow also creates one TEST_ITER4_UI_<ts> turf doc + its uploaded image. Owner payout_method is overwritten to momo/MTN/0244111222 by the regression test.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "New endpoints: POST /api/owner/uploads (multipart 'files', owner/admin bearer) → {files:[{path, url}]} where path='goturf/turfs/{owner_id}/<uuid>.<ext>' and url='/api/media/<path>'. 6MB cap, image/jpeg|png|webp|gif only. GET /api/media/{path} is PUBLIC, restricted to 'goturf/turfs/' prefix, rejects '..', 24h public cache. GET /api/files/{path} remains PRIVATE (JWT Bearer or ?auth=). Frontend owner Add-Turf dialog uploader uses hidden <input data-testid='turf-image-input'> behind data-testid='upload-image-label'; each thumbnail has data-testid='remove-image-<i>'. The stored image URL on turf.images is ABSOLUTE (BACKEND_URL + /api/media/...). TurfIn requires 'location' + uses 'turf_type' and 'base_hourly' (not 'type'/'base_price') — important for direct API testing.",
+  "rca of the issue": "N/A — feature works end-to-end on backend and frontend."
+}
