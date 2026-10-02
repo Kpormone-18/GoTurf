@@ -31,6 +31,14 @@ dist/
 dist
 
 # Environment files (comprehensive coverage)
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Emergent pod-local runtime state
+.emergent/cron/
+.emergent/markers/
 
 *token.json*
 *credentials.json*

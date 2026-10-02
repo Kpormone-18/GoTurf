@@ -6,3 +6,10 @@ crons:
     method: POST
     # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
     enabled: true
+  - name: morning-reminders
+    description: "Sends an early-morning reminder for all GoTurf sessions happening today"
+    cron: "0 7 * * *"
+    endpoint: "{{BASE_URL}}/api/cron/morning-reminders"
+    method: POST
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    enabled: true

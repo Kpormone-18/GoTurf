@@ -912,6 +912,35 @@ async def owner_overview(user: dict = Depends(require_roles("owner", "admin"))):
     }
 
 
+# ---- Owner payout account (bank / mobile money)
+class PayoutMethodIn(BaseModel):
+    type: Literal["bank", "momo"]
+    account_name: str
+    bank_name: Optional[str] = None
+    account_number: Optional[str] = None
+    momo_provider: Optional[str] = None
+    momo_number: Optional[str] = None
+
+
+@api.get("/owner/payout-method")
+async def get_payout_method(user: dict = Depends(require_roles("owner", "admin"))):
+    u = await db.users.find_one({"id": user["id"]}, {"_id": 0})
+    return u.get("payout_method")
+
+
+@api.post("/owner/payout-method")
+async def set_payout_method(body: PayoutMethodIn, user: dict = Depends(require_roles("owner", "admin"))):
+    pm = body.model_dump()
+    if pm["type"] == "bank" and not (pm.get("bank_name") and pm.get("account_number")):
+        raise HTTPException(400, "Bank name and account number are required")
+    if pm["type"] == "momo" and not (pm.get("momo_provider") and pm.get("momo_number")):
+        raise HTTPException(400, "Mobile money provider and number are required")
+    pm["updated_at"] = iso(now_utc())
+    await db.users.update_one({"id": user["id"]}, {"$set": {"payout_method": pm}})
+    await audit("payout_method", user["id"], f"Owner {user['email']} updated payout method ({pm['type']})")
+    return pm
+
+
 # ---- Owner Ghana Card verification
 @api.get("/owner/verification")
 async def get_verification(user: dict = Depends(require_roles("owner", "admin"))):
@@ -1266,6 +1295,32 @@ async def cron_send_reminders(request: Request):
             await db.bookings.update_one({"id": b["id"]}, {"$set": {"reminded": True}})
             sent += 1
     return {"status": "ok", "reminders_sent": sent}
+
+
+@api.post("/cron/morning-reminders")
+async def cron_morning_reminders(request: Request):
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    token = (request.headers.get("Authorization") or "")[7:]
+    if not WEBHOOK_CRON_SECRET or not hmac.compare_digest(token, WEBHOOK_CRON_SECRET):
+        raise HTTPException(401, "Unauthorized")
+    today = now_utc().strftime("%Y-%m-%d")
+    sent = 0
+    bookings = await db.bookings.find(
+        {"status": "confirmed", "date": today, "morning_reminded": {"$ne": True}}, {"_id": 0}).to_list(2000)
+    for b in bookings:
+        cust = b["customer"]
+        await send_sms(cust.get("phone"),
+                       f"GoTurf: You're playing today at {b['turf_name']}, {b['start_hour']:02d}:00 "
+                       f"for {b['duration']}h. Ref {b['reference']}. Have a great match!")
+        if cust.get("email"):
+            await send_email(to=cust["email"], subject=f"Today's match at {b['turf_name']}",
+                             html=_email_shell("You're playing today", [
+                                 f"Hi {escape(cust['name'])}, a quick heads-up that your GoTurf session is today at "
+                                 f"<strong>{escape(b['turf_name'])}</strong>, {b['start_hour']:02d}:00 for {b['duration']}h.",
+                                 f"Reference: <strong>{escape(b['reference'])}</strong>. See you on the turf!"]))
+        await db.bookings.update_one({"id": b["id"]}, {"$set": {"morning_reminded": True}})
+        sent += 1
+    return {"status": "ok", "morning_reminders_sent": sent}
 
 
 # ------------------------------------------------------------------ SEED

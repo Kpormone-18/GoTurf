@@ -9,7 +9,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "../components/ui/tabs"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "../components/ui/dialog";
 import { toast } from "sonner";
-import { Wallet, CalendarCheck, Building2, AlertTriangle, Plus, BadgeCheck, Upload, ShieldAlert } from "lucide-react";
+import { Wallet, CalendarCheck, Building2, AlertTriangle, Plus, BadgeCheck, Upload, ShieldAlert, Landmark } from "lucide-react";
 
 export default function OwnerDashboard() {
   const { user, loading } = useAuth();
@@ -133,6 +133,7 @@ export default function OwnerDashboard() {
         </TabsContent>
 
         <TabsContent value="payouts">
+          <PayoutMethodCard />
           <div className="bg-white border border-border rounded-xl overflow-hidden mt-4">
             <Table>
               <TableHeader><TableRow>
@@ -176,6 +177,72 @@ const Stat = ({ icon, label, value, warn }) => (
 );
 
 const AMENITY_OPTS = ["Floodlights", "Changing Rooms", "Parking", "Showers", "Cafeteria", "Water", "Indoor", "Spectator Seating", "WiFi", "Equipment Rental", "First Aid"];
+
+const MOMO_PROVIDERS = ["MTN MoMo", "Telecel Cash", "AirtelTigo Money"];
+
+function PayoutMethodCard() {
+  const [pm, setPm] = useState(null);
+  const [loaded, setLoaded] = useState(false);
+  const [f, setF] = useState({ type: "momo", account_name: "", bank_name: "", account_number: "", momo_provider: "MTN MoMo", momo_number: "" });
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api.get("/owner/payout-method").then((r) => { setPm(r.data); if (r.data) setF({ ...f, ...r.data }); setLoaded(true); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      const { data } = await api.post("/owner/payout-method", f);
+      setPm(data); toast.success("Payout account saved");
+    } catch (err) { toast.error(formatApiError(err.response?.data?.detail)); } finally { setBusy(false); }
+  };
+
+  if (!loaded) return null;
+
+  return (
+    <div className="bg-white border border-border rounded-xl p-5" data-testid="payout-method-card">
+      <div className="flex items-center gap-2 mb-1">
+        <Landmark className="w-5 h-5 text-primary" />
+        <h3 className="font-display font-bold text-lg">Payout account</h3>
+        {pm ? <span className="ml-auto text-xs font-bold uppercase bg-accent text-primary px-2 py-0.5 rounded">On file</span>
+            : <span className="ml-auto text-xs font-bold uppercase bg-amber-50 text-amber-700 px-2 py-0.5 rounded">Not set</span>}
+      </div>
+      <p className="text-sm text-muted-foreground mb-4">Where GoTurf sends your released payouts. Bank or mobile money.</p>
+
+      <div className="flex gap-2 mb-4">
+        {[["momo", "Mobile Money"], ["bank", "Bank account"]].map(([v, label]) => (
+          <button key={v} type="button" data-testid={`pm-type-${v}`} onClick={() => setF({ ...f, type: v })}
+            className={`text-sm font-semibold px-4 py-2 rounded-lg border ${f.type === v ? "border-primary bg-accent text-primary" : "border-border text-muted-foreground"}`}>{label}</button>
+        ))}
+      </div>
+
+      <div className="grid sm:grid-cols-2 gap-3">
+        <div className="sm:col-span-2"><Label>Account holder name</Label><Input data-testid="pm-account-name" value={f.account_name} onChange={(e) => setF({ ...f, account_name: e.target.value })} /></div>
+        {f.type === "momo" ? (
+          <>
+            <div>
+              <Label>Provider</Label>
+              <select data-testid="pm-momo-provider" value={f.momo_provider} onChange={(e) => setF({ ...f, momo_provider: e.target.value })}
+                className="w-full h-10 rounded-md border border-input bg-background px-3 text-sm">
+                {MOMO_PROVIDERS.map((p) => <option key={p} value={p}>{p}</option>)}
+              </select>
+            </div>
+            <div><Label>MoMo number</Label><Input data-testid="pm-momo-number" value={f.momo_number} onChange={(e) => setF({ ...f, momo_number: e.target.value })} placeholder="024 000 0000" /></div>
+          </>
+        ) : (
+          <>
+            <div><Label>Bank name</Label><Input data-testid="pm-bank-name" value={f.bank_name} onChange={(e) => setF({ ...f, bank_name: e.target.value })} /></div>
+            <div><Label>Account number</Label><Input data-testid="pm-account-number" value={f.account_number} onChange={(e) => setF({ ...f, account_number: e.target.value })} /></div>
+          </>
+        )}
+      </div>
+      <Button data-testid="save-payout-method" disabled={busy} onClick={save} className="mt-4 bg-primary hover:bg-primary/90">{busy ? "Saving…" : "Save payout account"}</Button>
+    </div>
+  );
+}
+
 
 function VerificationPanel({ verified, status, onDone }) {
   const [cardNo, setCardNo] = useState("");
