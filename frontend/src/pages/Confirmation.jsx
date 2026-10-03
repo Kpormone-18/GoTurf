@@ -1,3 +1,5 @@
+import { PageError } from "../components/PageError";
+import { LoadingScreen } from "../components/LoadingScreen";
 import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { api, ghs } from "../lib/api";
@@ -8,10 +10,12 @@ import { toast } from "sonner";
 
 export default function Confirmation() {
   const { bookingId } = useParams();
+  const [loadError, setLoadError] = useState(false);
   const [b, setB] = useState(null);
 
-  useEffect(() => { api.get(`/bookings/${bookingId}`).then((r) => setB(r.data)); }, [bookingId]);
-  if (!b) return <div className="max-w-xl mx-auto px-5 py-20 text-muted-foreground">Loading…</div>;
+  useEffect(() => { api.get(`/bookings/${bookingId}`).then((r) => setB(r.data)).catch(() => setLoadError(true)); }, [bookingId]);
+  if (loadError) return <PageError />;
+  if (!b) return <LoadingScreen />;
 
   return (
     <div className="max-w-xl mx-auto px-5 py-14">

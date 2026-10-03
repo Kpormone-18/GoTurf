@@ -42,8 +42,8 @@ export default function GuestLookup() {
       </div>
 
       <form onSubmit={find} className="bg-white border border-border rounded-2xl p-6 space-y-4">
-        <div><Label>Booking reference</Label><Input data-testid="lookup-reference" placeholder="GT-XXXXXX" required value={reference} onChange={(e) => setReference(e.target.value)} /></div>
-        <div><Label>Email or phone</Label><Input data-testid="lookup-contact" required value={contact} onChange={(e) => setContact(e.target.value)} /></div>
+        <div><Label htmlFor="lookup-reference">Booking reference</Label><Input id="lookup-reference" data-testid="lookup-reference" placeholder="GT-XXXXXX" required value={reference} onChange={(e) => setReference(e.target.value)} /></div>
+        <div><Label htmlFor="lookup-contact">Email or phone</Label><Input id="lookup-contact" data-testid="lookup-contact" required value={contact} onChange={(e) => setContact(e.target.value)} /></div>
         <Button data-testid="lookup-submit" disabled={busy} className="w-full bg-primary hover:bg-primary/90">
           <Search className="w-4 h-4 mr-1.5" /> {busy ? "Searching…" : "Find booking"}
         </Button>

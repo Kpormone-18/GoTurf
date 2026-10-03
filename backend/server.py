@@ -6,6 +6,7 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 import logging
+import time
 import uuid
 import random
 import string
@@ -14,9 +15,9 @@ import ipaddress
 import hmac
 import hashlib
 import bcrypt
+import boto3
 import jwt
 import httpx
-import requests
 from datetime import datetime, timezone, timedelta, date as date_cls
 from typing import List, Optional, Literal
 from html import escape
@@ -27,13 +28,12 @@ from fastapi import (FastAPI, APIRouter, HTTPException, Depends, Request, Query,
                      UploadFile, File, Form, Header)
 from fastapi.responses import Response
 from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr
+from sqlalchemy import text
+from storage.postgres import Database
 
 # ------------------------------------------------------------------ DB / APP
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+db = Database(os.environ["DATABASE_URL"])
 
 app = FastAPI(title="GoTurf API")
 api = APIRouter(prefix="/api")
@@ -50,11 +50,24 @@ STRIKE_PENALTY = 200           # GHS penalty after threshold
 SUSPENSION_DAYS = 14
 DISPUTE_WINDOW_MIN = 30        # payout hold after booking end
 OWNER_CANCEL_COUPON_PCT = 20   # future-booking discount after owner cancel
+AUTH_RATE_LIMIT = 10
+AUTH_RATE_WINDOW_SECONDS = 15 * 60
+_auth_attempts: dict[str, list[float]] = {}
+
+
+def enforce_auth_rate_limit(request: Request) -> None:
+    """Small local guard; production must use a shared proxy or Redis limit."""
+    client = request.client.host if request.client else "unknown"
+    now = time.monotonic()
+    attempts = [value for value in _auth_attempts.get(client, []) if now - value < AUTH_RATE_WINDOW_SECONDS]
+    if len(attempts) >= AUTH_RATE_LIMIT:
+        raise HTTPException(429, "Too many attempts. Try again later.", headers={"Retry-After": str(AUTH_RATE_WINDOW_SECONDS)})
+    attempts.append(now)
+    _auth_attempts[client] = attempts
 
 # ------------------------------------------------------------------ EMAIL
-EMAIL_BASE_URL = "https://integrations.emergentagent.com"
-EMAIL_KEY = os.environ.get("EMERGENT_EMAIL_KEY", "")
-EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME", "GoTurf")
+RESEND_API_KEY = (os.environ.get("RESEND_API_KEY") or "").strip()
+EMAIL_FROM = (os.environ.get("EMAIL_FROM") or "").strip()
 
 _SHORTENERS = ("bit.ly", "tinyurl.com", "t.co", "is.gd", "cutt.ly", "goo.gl", "rebrand.ly")
 _CRED_ASK = ("reply with your password", "reply with the code", "send your password", "cvv",
@@ -129,15 +142,15 @@ def _assert_safe_email(subject: str, html: str) -> None:
 
 
 async def send_email(*, to: str, subject: str, html: str) -> Optional[str]:
-    if not EMAIL_KEY:
-        logger.warning("EMERGENT_EMAIL_KEY missing; skipping email")
+    if not RESEND_API_KEY or not EMAIL_FROM:
+        logger.warning("Email disabled: set RESEND_API_KEY and EMAIL_FROM to enable delivery")
         return None
     _assert_safe_email(subject, html)
-    payload = {"to": [to], "subject": subject, "html": html, "from_name": EMAIL_FROM_NAME}
+    payload = {"from": EMAIL_FROM, "to": [to], "subject": subject, "html": html}
     try:
         async with httpx.AsyncClient(timeout=30) as c:
-            resp = await c.post(f"{EMAIL_BASE_URL}/api/v1/email/send",
-                                headers={"X-Email-Key": EMAIL_KEY}, json=payload)
+            resp = await c.post("https://api.resend.com/emails",
+                                headers={"Authorization": f"Bearer {RESEND_API_KEY}"}, json=payload)
         resp.raise_for_status()
         return resp.json().get("id")
     except Exception as e:
@@ -170,49 +183,61 @@ TWILIO_FROM = (os.environ.get("TWILIO_FROM") or "").strip()
 SMS_ENABLED = bool(TWILIO_SID and TWILIO_TOKEN and TWILIO_FROM)
 
 WEBHOOK_CRON_SECRET = (os.environ.get("WEBHOOK_CRON_SECRET") or "").strip()
+CORS_ORIGINS = [origin.strip() for origin in os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",") if origin.strip()]
 
-# ---- Object storage (Emergent managed)
-STORAGE_BASE = (os.environ.get("INTEGRATION_PROXY_URL") or "").strip() or "https://integrations.emergentagent.com"
-STORAGE_URL = STORAGE_BASE.rstrip("/") + "/objstore/api/v1/storage"
-EMERGENT_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
+# ---- Object storage (any S3-compatible provider: AWS S3, Cloudflare R2, etc.)
+S3_BUCKET = (os.environ.get("S3_BUCKET") or "").strip()
+S3_REGION = (os.environ.get("AWS_REGION") or "us-east-1").strip()
+S3_ENDPOINT_URL = (os.environ.get("S3_ENDPOINT_URL") or "").strip() or None
 APP_NAME = "goturf"
-_storage_key = None
 MIME_TYPES = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
               "gif": "image/gif", "webp": "image/webp", "pdf": "application/pdf"}
+LOCAL_UPLOAD_DIR = ROOT_DIR / "uploads"
+MAX_TURF_IMAGE_BYTES = 5 * 1024 * 1024
+TURF_IMAGE_TYPES = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
 
 
-def init_storage(force: bool = False):
-    global _storage_key
-    if _storage_key and not force:
-        return _storage_key
-    resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_KEY}, timeout=30)
-    resp.raise_for_status()
-    _storage_key = resp.json()["storage_key"]
-    return _storage_key
+def _storage_client():
+    if not S3_BUCKET:
+        return None
+    return boto3.client("s3", region_name=S3_REGION, endpoint_url=S3_ENDPOINT_URL)
 
 
 def put_object(path: str, data: bytes, content_type: str) -> dict:
-    key = init_storage()
-    resp = requests.put(f"{STORAGE_URL}/objects/{path}",
-                        headers={"X-Storage-Key": key, "Content-Type": content_type},
-                        data=data, timeout=120)
-    if resp.status_code == 404:
-        key = init_storage(force=True)
-        resp = requests.put(f"{STORAGE_URL}/objects/{path}",
-                            headers={"X-Storage-Key": key, "Content-Type": content_type},
-                            data=data, timeout=120)
-    resp.raise_for_status()
-    return resp.json()
+    client = _storage_client()
+    if client:
+        return client.put_object(Bucket=S3_BUCKET, Key=path, Body=data, ContentType=content_type)
+    target = (LOCAL_UPLOAD_DIR / path).resolve()
+    if LOCAL_UPLOAD_DIR.resolve() not in target.parents:
+        raise ValueError("Invalid storage path")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(data)
+    return {}
 
 
 def get_object(path: str):
-    key = init_storage()
-    resp = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=60)
-    if resp.status_code == 404:
-        key = init_storage(force=True)
-        resp = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=60)
-    resp.raise_for_status()
-    return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
+    client = _storage_client()
+    if client:
+        result = client.get_object(Bucket=S3_BUCKET, Key=path)
+        return result["Body"].read(), result.get("ContentType", "application/octet-stream")
+    target = (LOCAL_UPLOAD_DIR / path).resolve()
+    if LOCAL_UPLOAD_DIR.resolve() not in target.parents or not target.is_file():
+        raise FileNotFoundError(path)
+    ext = target.suffix.removeprefix(".").lower()
+    return target.read_bytes(), MIME_TYPES.get(ext, "application/octet-stream")
+
+
+def validate_turf_image(filename: str, content_type: str, data: bytes) -> str:
+    if content_type not in TURF_IMAGE_TYPES:
+        raise ValueError("Upload a JPEG, PNG or WebP image")
+    if not data or len(data) > MAX_TURF_IMAGE_BYTES:
+        raise ValueError("Images must be no larger than 5 MB")
+    is_valid = ((content_type == "image/jpeg" and data.startswith(b"\xff\xd8\xff")) or
+                (content_type == "image/png" and data.startswith(b"\x89PNG\r\n\x1a\n")) or
+                (content_type == "image/webp" and data.startswith(b"RIFF") and data[8:12] == b"WEBP"))
+    if not is_valid:
+        raise ValueError("The uploaded file is not a valid image")
+    return TURF_IMAGE_TYPES[content_type]
 
 
 # ---- SMS (Twilio-ready; logs when not configured)
@@ -229,6 +254,16 @@ async def send_sms(to: Optional[str], body: str):
                          data={"From": TWILIO_FROM, "To": to, "Body": body})
     except Exception as e:
         logger.error("SMS send failed: %s", e)
+
+
+async def notify(user_id: Optional[str], kind: str, title: str, body: str, booking_id: Optional[str] = None):
+    if not user_id:
+        return
+    await db.notifications.insert_one({
+        "id": str(uuid.uuid4()), "user_id": user_id, "kind": kind,
+        "title": title, "body": body, "booking_id": booking_id,
+        "read_at": None, "created_at": iso(now_utc()),
+    })
 
 
 # ---- Shared booking confirmation (used by mock pay, Paystack verify, webhook)
@@ -259,6 +294,10 @@ async def confirm_booking(booking_id: str, payment_ref: str):
     await send_sms(cust.get("phone"),
                    f"GoTurf: Booking {b['reference']} confirmed at {b['turf_name']} on {b['date']} "
                    f"{b['start_hour']:02d}:00 for {b['duration']}h. See you on the turf!")
+    await notify(b.get("user_id"), "booking_confirmed", "Booking confirmed",
+                 f"{b['turf_name']} is confirmed for {b['date']} at {b['start_hour']:02d}:00.", b["id"])
+    await notify(b.get("owner_id"), "booking_confirmed", "New confirmed booking",
+                 f"{b['customer']['name']} booked {b['turf_name']} for {b['date']}.", b["id"])
     return b
 
 
@@ -367,6 +406,16 @@ class RescheduleIn(BaseModel):
     new_duration: int
 
 
+class BookingMessageIn(BaseModel):
+    text: str = Field(min_length=1, max_length=1000)
+
+
+class OwnerCancelIn(BaseModel):
+    reason: str = Field(min_length=1, max_length=1000)
+    understands_penalty: bool
+    accepts_terms: bool
+
+
 class ReviewIn(BaseModel):
     booking_id: str
     rating: int
@@ -389,9 +438,13 @@ class TurfIn(BaseModel):
     peak_hours: List[int] = [17, 18, 19, 20, 21]
     open_hour: int = 6
     close_hour: int = 23
+    is_24_hour: bool = False
     packages: List[dict] = []
     lat: Optional[float] = None
     lng: Optional[float] = None
+    map_url: Optional[str] = ""
+    event_bookings: bool = False
+    event_details: str = ""
 
 
 class CouponIn(BaseModel):
@@ -421,9 +474,35 @@ def hour_rate(turf: dict, d: date_cls, h: int) -> float:
     return turf["base_hourly"]
 
 
+def booking_slots(turf: dict, date_str: str, start_hour: int, duration: int):
+    """Return chronological booking slots; only 24/7 pitches may pass midnight."""
+    if duration < 1:
+        raise HTTPException(400, "Duration must be at least one hour")
+    is_24_hour = turf.get("is_24_hour", False)
+    open_hour, close_hour = (0, 24) if is_24_hour else (turf["open_hour"], turf["close_hour"])
+    if start_hour < open_hour or start_hour >= close_hour:
+        raise HTTPException(400, "Requested start time is outside operating hours")
+    if not is_24_hour and start_hour + duration > close_hour:
+        raise HTTPException(400, f"This pitch closes at {close_hour:02d}:00. Choose a shorter package or a 24/7 turf.")
+    current = datetime.strptime(date_str, "%Y-%m-%d").date()
+    hour, remaining, slots = start_hour, duration, []
+    while remaining:
+        for slot_hour in range(hour, close_hour):
+            slots.append((current, slot_hour))
+            remaining -= 1
+            if not remaining:
+                return slots
+        current += timedelta(days=1)
+        hour = 0
+
+
+def stored_booking_slots(turf: dict, booking: dict):
+    return booking_slots(turf, booking["date"], booking["start_hour"], booking["duration"])
+
+
 def compute_quote(turf: dict, date_str: str, start_hour: int, duration: int, is_package: bool):
-    d = datetime.strptime(date_str, "%Y-%m-%d").date()
-    hourly_total = sum(hour_rate(turf, d, (start_hour + i) % 24) for i in range(duration))
+    slots = booking_slots(turf, date_str, start_hour, duration)
+    hourly_total = sum(hour_rate(turf, day, hour) for day, hour in slots)
     discount_pct = 0.0
     pkg = None
     if is_package:
@@ -434,13 +513,20 @@ def compute_quote(turf: dict, date_str: str, start_hour: int, duration: int, is_
                 break
     discount = round(hourly_total * discount_pct / 100, 2)
     total = round(hourly_total - discount, 2)
+    segments = []
+    for day, hour in slots:
+        if not segments or segments[-1]["date"] != day.isoformat():
+            segments.append({"date": day.isoformat(), "start_hour": hour, "end_hour": hour + 1})
+        else:
+            segments[-1]["end_hour"] = hour + 1
     return {"hourly_total": round(hourly_total, 2), "package_discount_pct": discount_pct,
-            "package_discount": discount, "total": total, "is_package": bool(pkg)}
+            "package_discount": discount, "total": total, "is_package": bool(pkg), "segments": segments}
 
 
-def booking_datetimes(date_str: str, start_hour: int, duration: int):
+def booking_datetimes(turf: dict, date_str: str, start_hour: int, duration: int):
     start = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc) + timedelta(hours=start_hour)
-    end = start + timedelta(hours=duration)
+    end_day, end_hour = booking_slots(turf, date_str, start_hour, duration)[-1]
+    end = datetime.combine(end_day, datetime.min.time(), tzinfo=timezone.utc) + timedelta(hours=end_hour)
     return start, end
 
 
@@ -487,7 +573,8 @@ def clean_turf(t: dict) -> dict:
 
 # ------------------------------------------------------------------ AUTH ROUTES
 @api.post("/auth/register")
-async def register(body: RegisterIn):
+async def register(body: RegisterIn, request: Request):
+    enforce_auth_rate_limit(request)
     email = body.email.lower()
     if await db.users.find_one({"email": email}):
         raise HTTPException(400, "Email already registered")
@@ -504,7 +591,8 @@ async def register(body: RegisterIn):
 
 
 @api.post("/auth/login")
-async def login(body: LoginIn):
+async def login(body: LoginIn, request: Request):
+    enforce_auth_rate_limit(request)
     email = body.email.lower()
     user = await db.users.find_one({"email": email})
     if not user or not verify_password(body.password, user["password_hash"]):
@@ -574,13 +662,15 @@ async def availability(turf_id: str, date: str):
     if not turf:
         raise HTTPException(404, "Turf not found")
     bookings = await db.bookings.find(
-        {"turf_id": turf_id, "date": date, "status": {"$in": ["confirmed", "pending_payment"]}},
-        {"_id": 0, "start_hour": 1, "duration": 1}).to_list(500)
+        {"turf_id": turf_id, "status": {"$in": ["confirmed", "pending_payment"]}},
+        {"_id": 0, "date": 1, "start_hour": 1, "duration": 1}).to_list(500)
     booked = set()
     for b in bookings:
-        for i in range(b["duration"]):
-            booked.add((b["start_hour"] + i) % 24)
-    return {"open_hour": turf["open_hour"], "close_hour": turf["close_hour"],
+        for day, hour in stored_booking_slots(turf, b):
+            if day.isoformat() == date:
+                booked.add(hour)
+    open_hour, close_hour = (0, 24) if turf.get("is_24_hour", False) else (turf["open_hour"], turf["close_hour"])
+    return {"open_hour": open_hour, "close_hour": close_hour, "is_24_hour": turf.get("is_24_hour", False),
             "booked_hours": sorted(booked), "peak_hours": turf.get("peak_hours", [])}
 
 
@@ -626,21 +716,24 @@ async def create_booking(body: BookingIn, user: Optional[dict] = Depends(get_opt
     owner = await db.users.find_one({"id": turf["owner_id"]})
     if owner and owner.get("suspended_until") and parse_dt(owner["suspended_until"]) > now_utc():
         raise HTTPException(409, "This turf is temporarily unavailable")
-    if body.start_hour < turf["open_hour"] or body.start_hour + body.duration > turf["close_hour"]:
-        raise HTTPException(400, "Requested time is outside operating hours")
+    requested_slots = booking_slots(turf, body.date, body.start_hour, body.duration)
 
     # concurrency / overlap check
     existing = await db.bookings.find(
         {"turf_id": body.turf_id, "date": body.date, "status": {"$in": ["confirmed", "pending_payment"]}},
-        {"_id": 0, "start_hour": 1, "duration": 1}).to_list(500)
-    requested = set(range(body.start_hour, body.start_hour + body.duration))
+        {"_id": 0, "date": 1, "start_hour": 1, "duration": 1}).to_list(500)
+    # Include bookings that started on prior dates when a package carries into this day.
+    existing += await db.bookings.find(
+        {"turf_id": body.turf_id, "date": {"$ne": body.date}, "status": {"$in": ["confirmed", "pending_payment"]}},
+        {"_id": 0, "date": 1, "start_hour": 1, "duration": 1}).to_list(500)
+    requested = set(requested_slots)
     for b in existing:
-        if requested & set(range(b["start_hour"], b["start_hour"] + b["duration"])):
+        if requested & set(stored_booking_slots(turf, b)):
             raise HTTPException(409, "One or more selected slots were just booked. Please pick another time.")
 
     q = compute_quote(turf, body.date, body.start_hour, body.duration, body.is_package)
     amount, coupon = await apply_coupon(body.coupon_code, body.turf_id, q["total"])
-    start, end = booking_datetimes(body.date, body.start_hour, body.duration)
+    start, end = booking_datetimes(turf, body.date, body.start_hour, body.duration)
     bid = str(uuid.uuid4())
     doc = {
         "id": bid, "reference": ref_code(), "turf_id": body.turf_id, "turf_name": turf["name"],
@@ -691,6 +784,17 @@ async def payments_config():
             "sms_enabled": SMS_ENABLED}
 
 
+@api.get("/healthz")
+async def healthz():
+    try:
+        async with db.engine.connect() as connection:
+            await connection.execute(text("SELECT 1"))
+    except Exception:
+        logger.exception("Health check database failure")
+        raise HTTPException(503, "Database unavailable")
+    return {"status": "ok"}
+
+
 @api.post("/bookings/{booking_id}/checkout")
 async def checkout(booking_id: str, body: CheckoutIn):
     b = await db.bookings.find_one({"id": booking_id}, {"_id": 0})
@@ -700,6 +804,8 @@ async def checkout(booking_id: str, body: CheckoutIn):
         return {"mode": "done", "booking_id": booking_id}
     if b["status"] != "pending_payment":
         raise HTTPException(400, "Booking cannot be paid in its current state")
+    if not b.get("user_id") and not body.customer.phone:
+        raise HTTPException(400, "A phone number is required for guest checkout")
     upd = {"customer": body.customer.model_dump()}
     total = b["total"]
     if body.coupon_code:
@@ -754,6 +860,10 @@ async def verify_payment(reference: str):
         logger.error("Paystack verify error: %s", e)
         raise HTTPException(502, "Could not verify payment")
     if result.get("status") and result["data"]["status"] == "success":
+        payment = result["data"]
+        if payment.get("currency") != "GHS" or payment.get("amount") != int(round(booking["total"] * 100)):
+            logger.error("Payment verification amount or currency mismatch for %s", reference)
+            raise HTTPException(400, "Payment details do not match this booking")
         await confirm_booking(booking["id"], reference)
         return {"status": "success", "booking_id": booking["id"]}
     return {"status": "failed", "booking_id": booking["id"]}
@@ -771,17 +881,22 @@ async def paystack_webhook(request: Request):
         raise HTTPException(401, "Invalid signature")
     event = await request.json()
     if event.get("event") == "charge.success":
-        ref = event["data"]["reference"]
+        payment = event["data"]
+        ref = payment["reference"]
         booking = await db.bookings.find_one({"reference": ref}, {"_id": 0}) \
             or await db.bookings.find_one({"payment_reference": ref}, {"_id": 0})
-        if booking:
+        if booking and payment.get("currency") == "GHS" and payment.get("amount") == int(round(booking["total"] * 100)):
             await confirm_booking(booking["id"], ref)
+        elif booking:
+            logger.error("Paystack webhook amount or currency mismatch for %s", ref)
     return {"status": "ok"}
 
 
 @api.post("/bookings/{booking_id}/pay")
 async def pay_booking(booking_id: str):
     """Mock payment confirmation (used when Paystack keys are absent)."""
+    if PAYSTACK_ENABLED:
+        raise HTTPException(404, "Not found")
     b = await db.bookings.find_one({"id": booking_id}, {"_id": 0})
     if not b:
         raise HTTPException(404, "Booking not found")
@@ -820,6 +935,70 @@ async def my_bookings(user: dict = Depends(get_current_user)):
     for b in bs:
         b["refund"] = refund_info(b)
     return bs
+
+
+@api.get("/notifications")
+async def notifications(user: dict = Depends(get_current_user)):
+    return await db.notifications.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(100)
+
+
+@api.post("/notifications/{notification_id}/read")
+async def read_notification(notification_id: str, user: dict = Depends(get_current_user)):
+    item = await db.notifications.find_one({"id": notification_id, "user_id": user["id"]}, {"_id": 0})
+    if not item:
+        raise HTTPException(404, "Notification not found")
+    await db.notifications.update_one({"id": notification_id}, {"$set": {"read_at": iso(now_utc())}})
+    return {"status": "read"}
+
+
+def authorize_booking_chat(b: dict, user: dict):
+    if user["role"] == "admin":
+        return
+    if user["role"] == "owner" and b.get("owner_id") == user["id"]:
+        return
+    if user["role"] == "customer" and b.get("user_id") == user["id"]:
+        return
+    raise HTTPException(403, "You can only access conversations for your own bookings")
+
+
+@api.get("/bookings/{booking_id}/messages")
+async def booking_messages(booking_id: str, day: Optional[str] = None,
+                           user: dict = Depends(get_current_user)):
+    b = await db.bookings.find_one({"id": booking_id}, {"_id": 0})
+    if not b:
+        raise HTTPException(404, "Booking not found")
+    authorize_booking_chat(b, user)
+    query = {"booking_id": booking_id}
+    if day:
+        query["day"] = day
+    messages = await db.booking_messages.find(query, {"_id": 0}).sort("created_at", 1).to_list(250)
+    days = await db.booking_messages.distinct("day", {"booking_id": booking_id})
+    return {"messages": messages, "days": sorted(days, reverse=True)}
+
+
+@api.post("/bookings/{booking_id}/messages")
+async def post_booking_message(booking_id: str, body: BookingMessageIn,
+                               user: dict = Depends(get_current_user)):
+    b = await db.bookings.find_one({"id": booking_id}, {"_id": 0})
+    if not b:
+        raise HTTPException(404, "Booking not found")
+    authorize_booking_chat(b, user)
+    text = body.text.strip()
+    if not text:
+        raise HTTPException(400, "Message cannot be empty")
+    created_at = now_utc()
+    message = {
+        "id": str(uuid.uuid4()), "booking_id": booking_id,
+        "sender_id": user["id"], "sender_name": user.get("name", "GoTurf user"),
+        "sender_role": user["role"], "text": text,
+        "created_at": iso(created_at), "day": created_at.date().isoformat(),
+    }
+    await db.booking_messages.insert_one(message)
+    recipient_id = b.get("owner_id") if user["id"] == b.get("user_id") else b.get("user_id")
+    await notify(recipient_id, "message", f"New message about {b['turf_name']}", text, booking_id)
+    if user["role"] == "owner" and not recipient_id:
+        await send_sms(b.get("customer", {}).get("phone"), f"GoTurf message about {b['turf_name']}: {text}")
+    return message
 
 
 def authorize_booking(b: dict, user: Optional[dict], contact: Optional[str]):
@@ -1004,6 +1183,30 @@ async def owner_turfs(user: dict = Depends(require_roles("owner", "admin"))):
     return await db.turfs.find({"owner_id": user["id"]}, {"_id": 0}).to_list(200)
 
 
+@api.post("/owner/turfs/media")
+async def upload_turf_media(request: Request, image: UploadFile = File(...),
+                            user: dict = Depends(require_roles("owner", "admin"))):
+    data = await image.read()
+    try:
+        ext = validate_turf_image(image.filename or "", image.content_type or "", data)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    path = f"{APP_NAME}/turfs/{user['id']}/{uuid.uuid4()}.{ext}"
+    put_object(path, data, image.content_type)
+    return {"url": f"{str(request.base_url).rstrip('/')}/api/media/{path}"}
+
+
+@api.get("/media/{path:path}")
+async def serve_turf_media(path: str):
+    if not path.startswith(f"{APP_NAME}/turfs/"):
+        raise HTTPException(404, "Image not found")
+    try:
+        data, content_type = get_object(path)
+    except Exception:
+        raise HTTPException(404, "Image not found")
+    return Response(content=data, media_type=content_type, headers={"Cache-Control": "public, max-age=86400"})
+
+
 @api.post("/owner/turfs")
 async def create_turf(body: TurfIn, user: dict = Depends(require_roles("owner", "admin"))):
     u = await db.users.find_one({"id": user["id"]}, {"_id": 0})
@@ -1043,7 +1246,10 @@ async def reschedule_decision(booking_id: str, approve: bool,
         raise HTTPException(404, "No reschedule request found")
     rr = b["reschedule_request"]
     if approve:
-        start, end = booking_datetimes(rr["new_date"], rr["new_start_hour"], rr["new_duration"])
+        turf = await db.turfs.find_one({"id": b["turf_id"]}, {"_id": 0})
+        if not turf:
+            raise HTTPException(404, "Turf not found")
+        start, end = booking_datetimes(turf, rr["new_date"], rr["new_start_hour"], rr["new_duration"])
         await db.bookings.update_one({"id": booking_id}, {"$set": {
             "date": rr["new_date"], "start_hour": rr["new_start_hour"], "duration": rr["new_duration"],
             "start_datetime": iso(start), "end_datetime": iso(end),
@@ -1058,12 +1264,17 @@ async def reschedule_decision(booking_id: str, approve: bool,
 
 
 @api.post("/owner/bookings/{booking_id}/cancel")
-async def owner_cancel(booking_id: str, user: dict = Depends(require_roles("owner", "admin"))):
+async def owner_cancel(booking_id: str, body: OwnerCancelIn,
+                       user: dict = Depends(require_roles("owner", "admin"))):
     b = await db.bookings.find_one({"id": booking_id}, {"_id": 0})
     if not b or (b["owner_id"] != user["id"] and user["role"] != "admin"):
         raise HTTPException(404, "Booking not found")
     if b["status"] != "confirmed":
         raise HTTPException(400, "Only confirmed bookings can be cancelled")
+    if parse_dt(b["start_datetime"]) <= now_utc() + timedelta(minutes=30):
+        raise HTTPException(400, "Bookings cannot be cancelled within 30 minutes of kickoff")
+    if not body.understands_penalty or not body.accepts_terms:
+        raise HTTPException(400, "Confirm the cancellation consequences and terms before continuing")
     # full refund + recovery coupon
     coupon_code = "SORRY-" + uuid.uuid4().hex[:5].upper()
     await db.coupons.insert_one({
@@ -1074,7 +1285,7 @@ async def owner_cancel(booking_id: str, user: dict = Depends(require_roles("owne
     await db.bookings.update_one({"id": booking_id}, {"$set": {
         "status": "cancelled_by_owner", "payment_status": "refunded",
         "cancellation": {"by": "owner", "at": iso(now_utc()), "refund_amount": b["amount_paid"],
-                         "penalty": 0, "recovery_coupon": coupon_code}}})
+                         "penalty": 0, "reason": body.reason.strip(), "recovery_coupon": coupon_code}}})
     # strike engine
     owner = await db.users.find_one({"id": b["owner_id"]})
     strikes = owner.get("strikes", 0) + 1
@@ -1093,10 +1304,14 @@ async def owner_cancel(booking_id: str, user: dict = Depends(require_roles("owne
         html = _email_shell("Your booking was cancelled by the owner", [
             f"Hi {escape(cust['name'])}, unfortunately the owner cancelled booking {escape(b['reference'])}.",
             f"You will receive a full refund of GHS {b['amount_paid']:.2f}.",
+            f"Reason provided: {escape(body.reason.strip())}",
             f"As an apology, here is <strong>{OWNER_CANCEL_COUPON_PCT}% off</strong> your next booking at this turf: "
             f"code <strong>{escape(coupon_code)}</strong>.",
         ])
         await send_email(to=cust["email"], subject=f"GoTurf booking {b['reference']} cancelled by owner", html=html)
+    await send_sms(cust.get("phone"), f"GoTurf: {b['turf_name']} cancelled your booking. Full refund: GHS {b['amount_paid']:.2f}. Reason: {body.reason.strip()}")
+    await notify(b.get("user_id"), "booking_cancelled", "Booking cancelled by owner",
+                 f"{b['turf_name']} was cancelled. A full refund of GHS {b['amount_paid']:.2f} is being processed.", booking_id)
     return {"status": "cancelled", "recovery_coupon": coupon_code, "strikes": strikes}
 
 
@@ -1412,11 +1627,9 @@ async def seed():
 
 @app.on_event("startup")
 async def _startup():
-    try:
-        init_storage()
-        logger.info("Object storage initialized")
-    except Exception as e:
-        logger.error("Storage init failed: %s", e)
+    await db.connect()
+    if not S3_BUCKET:
+        logger.info("Object storage not configured; uploads are stored locally in backend/uploads")
     await seed()
 
 
@@ -1429,7 +1642,7 @@ app.include_router(api)
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=False,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -1437,4 +1650,4 @@ app.add_middleware(
 
 @app.on_event("shutdown")
 async def _shutdown():
-    client.close()
+    await db.close()

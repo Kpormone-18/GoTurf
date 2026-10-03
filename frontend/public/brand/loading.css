@@ -1,0 +1,7 @@
+.brand-loading { display: grid; place-items: center; position: relative; isolation: isolate; overflow: hidden; background: radial-gradient(ellipse at 52% 48%, #125c49 0%, #08392e 35%, #041e19 75%); }
+.brand-loading--page { position: fixed; inset: 0; z-index: 60; min-height: 100dvh; }
+.brand-loading--inline { min-height: 300px; border-radius: 20px; }
+.brand-loading__mark { width: 112px; height: 112px; object-fit: contain; filter: brightness(1.65); animation: brand-breathe 2.8s ease-in-out infinite; }
+.brand-loading__notice { position: absolute; top: calc(50% + 86px); max-width: 340px; padding: 0 20px; color: #c8e6dc; text-align: center; font: 13px/1.6 system-ui, sans-serif; }
+@keyframes brand-breathe { 0%, 100% { opacity: .7; transform: scale(.97); } 50% { opacity: 1; transform: scale(1); } }
+@media (prefers-reduced-motion: reduce) { .brand-loading__mark { animation: none; } }

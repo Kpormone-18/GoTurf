@@ -1,3 +1,4 @@
+import { LoadingScreen } from "../components/LoadingScreen";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, formatApiError } from "../lib/api";
@@ -46,7 +47,9 @@ export default function Auth() {
   };
 
   return (
-    <div className="max-w-md mx-auto px-5 py-16">
+    <>
+    {busy && <LoadingScreen label="Opening your GoTurf account" />}
+    <div inert={busy} className="max-w-md mx-auto px-5 py-16">
       <div className="text-center mb-8">
         <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary bg-accent px-3 py-1.5 rounded-full mb-4">
           <ShieldCheck className="w-4 h-4" /> Secure sign in
@@ -64,17 +67,17 @@ export default function Auth() {
 
           <TabsContent value="login">
             <form onSubmit={doLogin} className="space-y-4">
-              <div><Label>Email</Label><Input data-testid="login-email" type="email" required value={li.email} onChange={(e) => setLi({ ...li, email: e.target.value })} /></div>
-              <div><Label>Password</Label><Input data-testid="login-password" type="password" required value={li.password} onChange={(e) => setLi({ ...li, password: e.target.value })} /></div>
+              <div><Label htmlFor="login-email">Email</Label><Input id="login-email" data-testid="login-email" type="email" autoComplete="email" autoCapitalize="none" required value={li.email} onChange={(e) => setLi({ ...li, email: e.target.value })} /></div>
+              <div><Label htmlFor="login-password">Password</Label><Input id="login-password" data-testid="login-password" type="password" autoComplete="current-password" required value={li.password} onChange={(e) => setLi({ ...li, password: e.target.value })} /></div>
               <Button data-testid="login-submit" disabled={busy} className="w-full bg-primary hover:bg-primary/90">{busy ? "Signing in…" : "Sign in"}</Button>
             </form>
           </TabsContent>
 
           <TabsContent value="register">
             <form onSubmit={doRegister} className="space-y-4">
-              <div><Label>Full name</Label><Input data-testid="reg-name" required value={reg.name} onChange={(e) => setReg({ ...reg, name: e.target.value })} /></div>
-              <div><Label>Email</Label><Input data-testid="reg-email" type="email" required value={reg.email} onChange={(e) => setReg({ ...reg, email: e.target.value })} /></div>
-              <div><Label>Password</Label><Input data-testid="reg-password" type="password" required minLength={6} value={reg.password} onChange={(e) => setReg({ ...reg, password: e.target.value })} /></div>
+              <div><Label htmlFor="reg-name">Full name</Label><Input id="reg-name" data-testid="reg-name" required value={reg.name} onChange={(e) => setReg({ ...reg, name: e.target.value })} /></div>
+              <div><Label htmlFor="reg-email">Email</Label><Input id="reg-email" data-testid="reg-email" type="email" autoComplete="email" autoCapitalize="none" required value={reg.email} onChange={(e) => setReg({ ...reg, email: e.target.value })} /></div>
+              <div><Label htmlFor="reg-password">Password</Label><Input id="reg-password" data-testid="reg-password" type="password" autoComplete="new-password" required minLength={6} value={reg.password} onChange={(e) => setReg({ ...reg, password: e.target.value })} /></div>
               <div>
                 <Label>I am a</Label>
                 <div className="grid grid-cols-2 gap-2 mt-1">
@@ -92,5 +95,6 @@ export default function Auth() {
         </Tabs>
       </div>
     </div>
+    </>
   );
 }

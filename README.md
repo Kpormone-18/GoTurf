@@ -1,9 +1,21 @@
 # GoTurf
 
-## About
+GoTurf is a marketplace for booking football pitches and event spaces in Accra, Ghana. Customers can discover venues, check availability, pay, and manage bookings; owners can publish and operate their turfs.
 
-GoTurf is an online astroturf (football pitch) booking marketplace, available as both a web app and a mobile app, built for the Ghanaian market starting in Accra. It lets users search for turfs, check real-time availability, book, pay, and manage their bookings entirely in-app, replacing the informal, walk-in and phone-call booking process most turf operators rely on today.
+## Run locally
 
-GoTurf is not limited to football. Turfs are frequently rented out for events such as weddings, funerals, and programs, and GoTurf is designed to serve both use cases from day one.
+1. Create a PostgreSQL database, then copy `backend/.env.example` to `backend/.env` and set `DATABASE_URL` and a strong `JWT_SECRET`.
+2. Install the backend with `pip install -r backend/requirements.txt`, then run `uvicorn server:app --reload` from `backend`.
+3. Copy `frontend/.env.example` to `frontend/.env`, set `REACT_APP_BACKEND_URL=http://localhost:8000`, then run `yarn start` from `frontend`.
 
-GoTurf does not own any turfs. It is a marketplace: independent turf owners list and manage their own pitches, and GoTurf provides the booking, payment, and trust infrastructure that ties everything together.
+## Production integrations
+
+| Service | Required for | Variables |
+| --- | --- | --- |
+| PostgreSQL | Core application data | `DATABASE_URL` |
+| Paystack | Live card and mobile-money payments | `PAYSTACK_SECRET_KEY`, `PAYSTACK_PUBLIC_KEY` |
+| Resend | Transactional email | `RESEND_API_KEY`, `EMAIL_FROM` |
+| Twilio | SMS confirmations and reminders | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM` |
+| S3-compatible storage | Owner identity-document uploads | `S3_BUCKET`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, optional `S3_ENDPOINT_URL` |
+
+Paystack, Resend, Twilio, and S3 storage are optional during local development. Paystack checkout remains in mock mode until its secret key is set; notifications and document uploads stay disabled until configured. Leaflet uses OpenStreetMap and needs no API key.

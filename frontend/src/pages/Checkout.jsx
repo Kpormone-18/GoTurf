@@ -1,3 +1,5 @@
+import { PageError } from "../components/PageError";
+import { LoadingScreen } from "../components/LoadingScreen";
 import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { api, formatApiError, ghs } from "../lib/api";
@@ -13,6 +15,7 @@ export default function Checkout() {
   const { bookingId } = useParams();
   const navigate = useNavigate();
   const { user } = useAuth();
+  const [loadError, setLoadError] = useState(false);
   const [booking, setBooking] = useState(null);
   const [cfg, setCfg] = useState(null);
   const [cust, setCust] = useState({ name: "", email: "", phone: "" });
@@ -20,20 +23,21 @@ export default function Checkout() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    api.get("/payments/config").then((r) => setCfg(r.data));
+    api.get("/payments/config").then((r) => setCfg(r.data)).catch(() => setLoadError(true));
     api.get(`/bookings/${bookingId}`).then((r) => {
       setBooking(r.data);
       setCust({ name: r.data.customer.name === "Guest" ? (user?.name || "") : r.data.customer.name,
                 email: r.data.customer.email || user?.email || "", phone: r.data.customer.phone || "" });
-    });
+    }).catch(() => setLoadError(true));
   }, [bookingId, user]);
 
-  if (!booking || !cfg) return <div className="max-w-3xl mx-auto px-5 py-20 text-muted-foreground">Loading checkout…</div>;
+  if (loadError) return <PageError />;
+  if (!booking || !cfg) return <LoadingScreen />;
 
   const paystack = cfg.provider === "paystack";
 
   const pay = async () => {
-    if (!cust.name || (!cust.email && !cust.phone)) { toast.error("Enter your name and an email or phone"); return; }
+    if (!cust.name || !cust.phone || (!cust.email && !cust.phone)) { toast.error("Enter your name, phone number, and an email or phone"); return; }
     if (paystack && !cust.email) { toast.error("Email is required for Paystack payments"); return; }
     setBusy(true);
     try {
@@ -50,6 +54,8 @@ export default function Checkout() {
     } catch (err) { toast.error(formatApiError(err.response?.data?.detail)); setBusy(false); }
   };
 
+  if (busy) return <LoadingScreen label="Preparing your booking" />;
+
   return (
     <div className="max-w-5xl mx-auto px-5 lg:px-8 py-10 grid lg:grid-cols-5 gap-8">
       <div className="lg:col-span-3">
@@ -58,17 +64,17 @@ export default function Checkout() {
 
         <div className="bg-white border border-border rounded-2xl p-6 space-y-4">
           <h2 className="font-display font-bold text-lg">Your details</h2>
-          <div><Label>Full name</Label><Input data-testid="co-name" value={cust.name} onChange={(e) => setCust({ ...cust, name: e.target.value })} /></div>
+          <div><Label htmlFor="co-name">Full name</Label><Input id="co-name" data-testid="co-name" value={cust.name} onChange={(e) => setCust({ ...cust, name: e.target.value })} /></div>
           <div className="grid sm:grid-cols-2 gap-4">
-            <div><Label>Email {paystack && <span className="text-destructive">*</span>}</Label><Input data-testid="co-email" type="email" value={cust.email} onChange={(e) => setCust({ ...cust, email: e.target.value })} placeholder="for your receipt" /></div>
-            <div><Label>Phone</Label><Input data-testid="co-phone" value={cust.phone} onChange={(e) => setCust({ ...cust, phone: e.target.value })} placeholder="+233…" /></div>
+            <div><Label htmlFor="co-email">Email {paystack && <span className="text-destructive">*</span>}</Label><Input id="co-email" data-testid="co-email" type="email" autoComplete="email" autoCapitalize="none" value={cust.email} onChange={(e) => setCust({ ...cust, email: e.target.value })} placeholder="for your receipt" /></div>
+            <div><Label htmlFor="co-phone">Phone <span className="text-destructive">*</span></Label><Input id="co-phone" type="tel" autoComplete="tel" data-testid="co-phone" required value={cust.phone} onChange={(e) => setCust({ ...cust, phone: e.target.value })} placeholder="+233…" /></div>
           </div>
           {!user && <p className="text-xs text-muted-foreground">Booking as a guest — keep your reference safe to manage this booking later.</p>}
         </div>
 
         <div className="bg-white border border-border rounded-2xl p-6 mt-5">
           <h2 className="font-display font-bold text-lg mb-3">Promo code</h2>
-          <Input data-testid="co-coupon" value={coupon} onChange={(e) => setCoupon(e.target.value.toUpperCase())} placeholder="Enter code (optional)" />
+          <Input aria-label="Promo code" data-testid="co-coupon" value={coupon} onChange={(e) => setCoupon(e.target.value.toUpperCase())} placeholder="Enter code (optional)" />
         </div>
 
         <div className="bg-white border border-border rounded-2xl p-6 mt-5">

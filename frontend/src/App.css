@@ -1,1 +1,6 @@
 .App { min-height: 100vh; }
+.route-motion { min-height: 1px; transform-origin: 50% 12%; will-change: opacity, transform; }
+
+@media (prefers-reduced-motion: reduce) {
+  .route-motion { will-change: auto; }
+}

@@ -11,6 +11,17 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401) {
+      localStorage.removeItem("goturf_token");
+      window.dispatchEvent(new Event("goturf-auth-expired"));
+    }
+    return Promise.reject(error);
+  },
+);
+
 export const getToken = () => localStorage.getItem("goturf_token");
 
 // Build an authenticated file URL for <img src> (object-storage files served by backend).

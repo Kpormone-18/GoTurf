@@ -1,11 +1,14 @@
+import { PageError } from "../components/PageError";
 import { useEffect, useState, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { LoadingScreen } from "../components/LoadingScreen";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, formatApiError, ghs } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { CountdownTimer } from "../components/CountdownTimer";
+import { BookingChatDialog } from "../components/BookingChatDialog";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter,
 } from "../components/ui/dialog";
@@ -24,9 +27,17 @@ const statusStyle = {
 export default function MyBookings() {
   const { user, loading } = useAuth();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const [loadError, setLoadError] = useState(false);
   const [bookings, setBookings] = useState([]);
+  const [fetching, setFetching] = useState(true);
 
-  const load = useCallback(() => { api.get("/me/bookings").then((r) => setBookings(r.data)); }, []);
+  const load = useCallback(() => {
+    setFetching(true); setLoadError(false);
+    api.get("/me/bookings").then((r) => setBookings(r.data))
+      .catch(() => setLoadError(true))
+      .finally(() => setFetching(false));
+  }, []);
   useEffect(() => {
     if (loading) return;
     if (!user) { navigate("/auth"); return; }
@@ -42,6 +53,8 @@ export default function MyBookings() {
   };
 
   const now = Date.now();
+  if (loadError) return <PageError onRetry={load} />;
+  if (loading || fetching) return <LoadingScreen label="Loading your bookings" />;
   const isPast = (b) => new Date(b.end_datetime).getTime() < now;
 
   return (
@@ -95,6 +108,8 @@ export default function MyBookings() {
               {b.status === "confirmed" && isPast(b) && (
                 <div className="mt-4"><ReviewDialog booking={b} onDone={load} /></div>
               )}
+
+              <div className="mt-4 border-t border-border pt-3"><BookingChatDialog booking={b} openOnMount={searchParams.get("chat") === b.id} /></div>
 
               {b.status === "cancelled_by_owner" && b.cancellation?.recovery_coupon && (
                 <div className="mt-3 text-xs bg-accent text-primary font-semibold rounded-lg px-3 py-2">

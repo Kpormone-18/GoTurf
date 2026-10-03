@@ -1,3 +1,5 @@
+import { PageError } from "../components/PageError";
+import { LoadingScreen } from "../components/LoadingScreen";
 import { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, formatApiError, ghs, fileUrl } from "../lib/api";
@@ -14,6 +16,7 @@ import { TrendingUp, Banknote, Building2, Users, AlertCircle, Plus, BadgeCheck }
 export default function AdminDashboard() {
   const { user, loading } = useAuth();
   const navigate = useNavigate();
+  const [loadError, setLoadError] = useState(false);
   const [stats, setStats] = useState(null);
   const [bookings, setBookings] = useState([]);
   const [owners, setOwners] = useState([]);
@@ -23,7 +26,7 @@ export default function AdminDashboard() {
   const [verifications, setVerifications] = useState([]);
 
   const load = useCallback(() => {
-    api.get("/admin/stats").then((r) => setStats(r.data));
+    api.get("/admin/stats").then((r) => setStats(r.data)).catch(() => setLoadError(true));
     api.get("/admin/bookings").then((r) => setBookings(r.data));
     api.get("/admin/owners").then((r) => setOwners(r.data));
     api.get("/admin/disputes").then((r) => setDisputes(r.data));
@@ -67,7 +70,8 @@ export default function AdminDashboard() {
     catch (err) { toast.error(formatApiError(err.response?.data?.detail)); }
   };
 
-  if (!stats) return <div className="max-w-7xl mx-auto px-5 py-20 text-muted-foreground">Loading admin…</div>;
+  if (loadError) return <PageError />;
+  if (!stats) return <LoadingScreen />;
 
   return (
     <div className="max-w-7xl mx-auto px-5 lg:px-8 py-8">
@@ -94,7 +98,7 @@ export default function AdminDashboard() {
 
         <TabsContent value="bookings">
           <Panel>
-            <Table>
+            <Table className="min-w-[640px]">
               <TableHeader><TableRow>
                 <TableHead>Ref</TableHead><TableHead>Turf</TableHead><TableHead>Status</TableHead>
                 <TableHead>Amount</TableHead><TableHead>Payout</TableHead><TableHead className="text-right">Actions</TableHead>
@@ -266,13 +270,13 @@ function CouponDialog({ onDone }) {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild><Button className="bg-primary hover:bg-primary/90" data-testid="add-coupon-btn"><Plus className="w-4 h-4 mr-1.5" /> New coupon</Button></DialogTrigger>
-      <DialogContent>
+      <DialogContent aria-describedby={undefined}>
         <DialogHeader><DialogTitle>Create coupon</DialogTitle></DialogHeader>
         <div className="space-y-3">
-          <div><Label>Code</Label><Input data-testid="coupon-code" value={f.code} onChange={(e) => setF({ ...f, code: e.target.value.toUpperCase() })} /></div>
-          <div className="grid grid-cols-2 gap-3">
-            <div><Label>Discount %</Label><Input type="number" data-testid="coupon-pct" value={f.discount_pct} onChange={(e) => setF({ ...f, discount_pct: e.target.value })} /></div>
-            <div><Label>Max uses</Label><Input type="number" value={f.max_uses} onChange={(e) => setF({ ...f, max_uses: e.target.value })} /></div>
+          <div><Label htmlFor="coupon-code">Code</Label><Input id="coupon-code" data-testid="coupon-code" value={f.code} onChange={(e) => setF({ ...f, code: e.target.value.toUpperCase() })} /></div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div><Label>Discount %</Label><Input aria-label="Discount %" type="number" data-testid="coupon-pct" value={f.discount_pct} onChange={(e) => setF({ ...f, discount_pct: e.target.value })} /></div>
+            <div><Label>Max uses</Label><Input aria-label="Max uses" type="number" value={f.max_uses} onChange={(e) => setF({ ...f, max_uses: e.target.value })} /></div>
           </div>
         </div>
         <DialogFooter><Button onClick={save} data-testid="save-coupon" className="bg-primary hover:bg-primary/90">Create</Button></DialogFooter>

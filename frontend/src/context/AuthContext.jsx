@@ -16,6 +16,12 @@ export function AuthProvider({ children }) {
       .finally(() => setLoading(false));
   }, []);
 
+  useEffect(() => {
+    const clearExpiredSession = () => setUser(null);
+    window.addEventListener("goturf-auth-expired", clearExpiredSession);
+    return () => window.removeEventListener("goturf-auth-expired", clearExpiredSession);
+  }, []);
+
   const loginWith = (token, u) => {
     localStorage.setItem("goturf_token", token);
     setUser(u);

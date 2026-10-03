@@ -6,12 +6,12 @@ export const TurfCard = ({ turf, className = "" }) => (
   <Link
     to={`/turf/${turf.id}`}
     data-testid={`turf-card-${turf.id}`}
-    className={`group block bg-white rounded-xl border border-border overflow-hidden hover:border-primary/40 ${className}`}
+    className={`turf-card group block min-w-0 bg-white rounded-xl border border-border overflow-hidden hover:border-primary/40 ${className}`}
     style={{ transition: "border-color .2s ease, transform .2s ease" }}
   >
     <div className="relative aspect-[16/10] overflow-hidden bg-muted">
       <img
-        src={turf.images?.[0]}
+        loading="lazy" decoding="async" src={turf.images?.[0]}
         alt={turf.name}
         className="w-full h-full object-cover group-hover:scale-105"
         style={{ transition: "transform .5s cubic-bezier(.16,1,.3,1)" }}
@@ -25,16 +25,16 @@ export const TurfCard = ({ turf, className = "" }) => (
         </div>
       )}
     </div>
-    <div className="p-4">
+    <div className="p-5">
       <h3 className="font-display font-extrabold text-lg leading-tight group-hover:text-primary" style={{ transition: "color .2s" }}>
         {turf.name}
       </h3>
       <div className="flex items-center gap-1 text-sm text-muted-foreground mt-1">
         <MapPin className="w-3.5 h-3.5" /> {turf.neighborhood}
       </div>
-      <div className="flex items-center justify-between mt-3 pt-3 border-t border-border">
+      <div className="flex items-center justify-between gap-2 mt-4 pt-3 border-t border-border">
         <div>
-          <span className="font-display font-black text-xl">{ghs(turf.base_hourly)}</span>
+          <span className="whitespace-nowrap font-display font-bold text-xl">{ghs(turf.base_hourly)}</span>
           <span className="text-xs text-muted-foreground font-semibold">/hr</span>
         </div>
         <span className="text-xs text-muted-foreground">{turf.playing_format}</span>
