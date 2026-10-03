@@ -47,4 +47,5 @@ guest, customer, owner, admin (admin covers support/finance/super for V1).
 - P2: Analytics charts, reconciliation export, coupon targeting UI, phone-number normalization, split server.py into modules, migrate to FastAPI lifespan handlers, events workflow (V2), multi-city.
 
 ## Test accounts
-admin kpomsgh@gmail.com / REDACTED_DO_NOT_USE · owner owner@goturf.gh / REDACTED_DO_NOT_USE · customer customer@goturf.gh / REDACTED_DO_NOT_USE
+
+Create test accounts only through local or CI environment variables. Never record account credentials in repository files, tickets, screenshots, or chat.
