@@ -15,9 +15,9 @@ if not BASE_URL:
 
 API = f"{BASE_URL}/api"
 
-ADMIN = {"email": "kpomsgh@gmail.com", "password": "REDACTED_DO_NOT_USE"}
-OWNER = {"email": "owner@goturf.gh", "password": "REDACTED_DO_NOT_USE"}
-CUSTOMER = {"email": "customer@goturf.gh", "password": "REDACTED_DO_NOT_USE"}
+ADMIN = {"email": os.environ["TEST_ADMIN_EMAIL"], "password": os.environ["TEST_ADMIN_PASSWORD"]}
+OWNER = {"email": os.environ["TEST_OWNER_EMAIL"], "password": os.environ["TEST_OWNER_PASSWORD"]}
+CUSTOMER = {"email": os.environ["TEST_CUSTOMER_EMAIL"], "password": os.environ["TEST_CUSTOMER_PASSWORD"]}
 
 
 # ---------- fixtures ----------

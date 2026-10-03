@@ -1555,12 +1555,20 @@ async def seed():
     elif not verify_password(admin_pw, existing["password_hash"]):
         await db.users.update_one({"email": admin_email}, {"$set": {"password_hash": hash_password(admin_pw)}})
 
+    # Demo accounts and sample turfs are opt-in. They must never be created in production.
+    if os.environ.get("SEED_DEMO_DATA", "false").lower() not in {"1", "true", "yes"}:
+        return
+    owner_password = os.environ.get("SEED_DEMO_OWNER_PASSWORD")
+    customer_password = os.environ.get("SEED_DEMO_CUSTOMER_PASSWORD")
+    if not owner_password or not customer_password:
+        raise RuntimeError("Demo seeding requires SEED_DEMO_OWNER_PASSWORD and SEED_DEMO_CUSTOMER_PASSWORD")
+
     # seeded owner + customer
     owner = await db.users.find_one({"email": "owner@goturf.gh"})
     if not owner:
         owner_id = str(uuid.uuid4())
         await db.users.insert_one({"id": owner_id, "name": "Kwame Mensah", "email": "owner@goturf.gh",
-                                   "password_hash": hash_password("REDACTED_DO_NOT_USE"), "role": "owner",
+                                   "password_hash": hash_password(owner_password), "role": "owner",
                                    "strikes": 0, "suspended_until": None, "penalty_balance": 0,
                                    "verified": True, "verification_status": "approved",
                                    "created_at": iso(now_utc())})
@@ -1568,7 +1576,7 @@ async def seed():
         owner_id = owner["id"]
     if not await db.users.find_one({"email": "customer@goturf.gh"}):
         await db.users.insert_one({"id": str(uuid.uuid4()), "name": "Ama Owusu", "email": "customer@goturf.gh",
-                                   "password_hash": hash_password("REDACTED_DO_NOT_USE"), "role": "customer",
+                                   "password_hash": hash_password(customer_password), "role": "customer",
                                    "strikes": 0, "suspended_until": None, "penalty_balance": 0,
                                    "verified": True, "created_at": iso(now_utc())})
 

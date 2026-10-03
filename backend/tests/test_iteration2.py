@@ -13,8 +13,8 @@ with open("/app/frontend/.env") as f:
             BASE_URL = line.split("=", 1)[1].strip().rstrip("/")
 API = f"{BASE_URL}/api"
 
-ADMIN = {"email": "kpomsgh@gmail.com", "password": "REDACTED_DO_NOT_USE"}
-CRON_SECRET = "REDACTED_TEST_SECRET"
+ADMIN = {"email": os.environ["TEST_ADMIN_EMAIL"], "password": os.environ["TEST_ADMIN_PASSWORD"]}
+CRON_SECRET = os.environ["TEST_WEBHOOK_CRON_SECRET"]
 
 
 def _png_bytes():
@@ -104,7 +104,7 @@ def test_payment_verify_mock(s, booking):
 def new_owner(s):
     email = f"test_owner_{uuid.uuid4().hex[:8]}@goturf.gh"
     r = s.post(f"{API}/auth/register",
-               json={"name": "TEST Owner", "email": email, "password": "REDACTED_DO_NOT_USE",
+               json={"name": "TEST Owner", "email": email, "password": os.environ["TEST_NEW_OWNER_PASSWORD"],
                      "role": "owner"}, timeout=30)
     assert r.status_code == 200, r.text
     j = r.json()
