@@ -164,10 +164,11 @@ PAYSTACK_SECRET = (os.environ.get("PAYSTACK_SECRET_KEY") or "").strip()
 PAYSTACK_PUBLIC = (os.environ.get("PAYSTACK_PUBLIC_KEY") or "").strip()
 PAYSTACK_ENABLED = PAYSTACK_SECRET.startswith("sk_")
 
-TWILIO_SID = (os.environ.get("TWILIO_ACCOUNT_SID") or "").strip()
-TWILIO_TOKEN = (os.environ.get("TWILIO_AUTH_TOKEN") or "").strip()
-TWILIO_FROM = (os.environ.get("TWILIO_FROM") or "").strip()
-SMS_ENABLED = bool(TWILIO_SID and TWILIO_TOKEN and TWILIO_FROM)
+HUBTEL_CLIENT_ID = (os.environ.get("HUBTEL_CLIENT_ID") or "").strip()
+HUBTEL_CLIENT_SECRET = (os.environ.get("HUBTEL_CLIENT_SECRET") or "").strip()
+HUBTEL_SENDER_ID = (os.environ.get("HUBTEL_SENDER_ID") or "").strip()
+HUBTEL_SMS_URL = (os.environ.get("HUBTEL_SMS_URL") or "https://smsc.hubtel.com/v1/messages/send").strip()
+SMS_ENABLED = bool(HUBTEL_CLIENT_ID and HUBTEL_CLIENT_SECRET and HUBTEL_SENDER_ID)
 
 WEBHOOK_CRON_SECRET = (os.environ.get("WEBHOOK_CRON_SECRET") or "").strip()
 
@@ -215,7 +216,7 @@ def get_object(path: str):
     return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
 
 
-# ---- SMS (Twilio-ready; logs when not configured)
+# ---- SMS (Hubtel Ghana; logs when not configured)
 async def send_sms(to: Optional[str], body: str):
     if not to:
         return
@@ -224,9 +225,10 @@ async def send_sms(to: Optional[str], body: str):
         return
     try:
         async with httpx.AsyncClient(timeout=20) as c:
-            await c.post(f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_SID}/Messages.json",
-                         auth=(TWILIO_SID, TWILIO_TOKEN),
-                         data={"From": TWILIO_FROM, "To": to, "Body": body})
+            response = await c.post(HUBTEL_SMS_URL,
+                                    auth=(HUBTEL_CLIENT_ID, HUBTEL_CLIENT_SECRET),
+                                    json={"From": HUBTEL_SENDER_ID, "To": to, "Content": body})
+            response.raise_for_status()
     except Exception as e:
         logger.error("SMS send failed: %s", e)
 
