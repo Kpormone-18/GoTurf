@@ -6,6 +6,8 @@ This document is a technical and operational launch plan, not legal advice. A Gh
 
 **Current decision: do not launch public payments yet.** The app is suitable for internal demo and controlled staging after the items marked **Launch blocker** are complete.
 
+> **NestJS branch notice:** `production-ready-nestjs` intentionally removes the legacy FastAPI source. It is a clean NestJS infrastructure branch, not a fully ported marketplace API yet. The API-parity milestones below must be completed before this branch can power the public React app.
+
 ## Current architecture and data flow
 
 | Layer | Current implementation | Data handled |
